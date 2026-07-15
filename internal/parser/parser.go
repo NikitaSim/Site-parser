@@ -53,53 +53,6 @@ func (p *siteParser) GetDescription(url string) (string, error) {
 	return text, nil
 }
 
-// func (p *siteParser) GetDescription(url string) (string, error) {
-
-// 	fmt.Println("Open:", url)
-
-// 	doc, err := p.LoadPage(url)
-// 	if err != nil {
-// 		return "", err
-// 	}
-
-// 	fmt.Println("Tabs:", doc.Find(".productTabsContent").Length())
-// 	fmt.Println("Active:", doc.Find(".productTabsContent").Length())
-// 	fmt.Println("P:", doc.Find(".productTabsContent p").Length())
-
-// 	var builder strings.Builder
-
-// 	doc.Find(".productTabsContent p").Each(func(i int, s *goquery.Selection) {
-
-// 		key := strings.TrimSpace(s.Find("strong").Text())
-
-// 		value := strings.TrimSpace(
-// 			s.Clone().
-// 				Find("strong").
-// 				Remove().
-// 				End().
-// 				Text(),
-// 		)
-
-// 		value = strings.Join(strings.Fields(value), " ")
-
-// 		if key != "" && value != "" {
-// 			builder.WriteString(key)
-// 			builder.WriteString(": ")
-// 			builder.WriteString(value)
-// 			builder.WriteString(". ")
-// 		}
-// 	})
-
-// 	if builder.Len() > 0 {
-// 		return builder.String(), nil
-// 	}
-
-// 	text := strings.TrimSpace(doc.Find(".productTabsContent p").First().Text())
-// 	text = strings.Join(strings.Fields(text), " ")
-
-// 	return text, nil
-// }
-
 func (p *siteParser) LoadPage(url string) (*goquery.Document, error) {
 
 	resp, err := http.Get(url)
@@ -107,6 +60,7 @@ func (p *siteParser) LoadPage(url string) (*goquery.Document, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	//fmt.Println("СТАТУС САЙТА", resp.StatusCode, url)
 
 	return goquery.NewDocumentFromReader(resp.Body)
 }
@@ -130,9 +84,7 @@ func (p *siteParser) GetCategories(doc *goquery.Document) []Category {
 	return categories
 }
 
-func (p *siteParser) GetProducts(doc *goquery.Document, category string) []Product {
-
-	var products []Product
+func (p *siteParser) GetProducts(doc *goquery.Document, category string, products chan<- Product, count *int) {
 
 	doc.Find(".product").Each(func(i int, s *goquery.Selection) {
 
@@ -154,31 +106,24 @@ func (p *siteParser) GetProducts(doc *goquery.Document, category string) []Produ
 
 		link, _ := s.Find(".title").Attr("href")
 
-		description, err := p.GetDescription(link)
-		if err != nil {
-			description = "error"
+		products <- Product{
+			Category: category,
+			Title:    title,
+			Price:    price,
+			Info:     info,
+			Link:     link,
 		}
-
-		products = append(products, Product{
-			Category:    category,
-			Title:       title,
-			Price:       price,
-			Info:        info,
-			Description: description,
-			Link:        link,
-		})
-
-		fmt.Println(description)
-
+		(*count)++
 	})
 
-	return products
+	//return products
 }
 
 func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) error {
 
 	doc, err := p.LoadPage(url)
 	if err != nil {
+		results.Errors++
 		return err
 	}
 
@@ -186,36 +131,67 @@ func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) erro
 	var wg sync.WaitGroup
 	var mx sync.Mutex
 
-	for _, category := range categories {
-		wg.Add(1)
-		results.Categories++
-		go func(category Category) {
-			defer wg.Done()
-			var count int
+	product := make(chan Product, 32) //16
+	var workerWG sync.WaitGroup
 
-			//fmt.Println(category.Name)
+	for i := 0; i < 15; i++ { //10
+		workerWG.Add(1)
+		go func() {
+			defer workerWG.Done()
+			for prod := range product {
 
-			doc, err := p.LoadPage(category.URL)
-			if err != nil {
-				fmt.Println(err)
-				return
+				description, err := p.GetDescription(prod.Link)
+				if err != nil {
+					description = ""
+				}
+				prod.Description = description
+				ch <- prod
+
+				//fmt.Println(description)
 			}
-
-			products := p.GetProducts(doc, category.Name)
-
-			for _, product := range products {
-				ch <- product
-				count++
-			}
-			//fmt.Println(count)
-			mx.Lock()
-			results.Parsed += count
-			mx.Unlock()
-
-		}(category)
+		}()
 	}
 
-	wg.Wait()
+	job := make(chan Category)
+	go func() {
+		defer close(job)
+		for _, category := range categories {
+			results.Categories++
+			job <- category
+		}
+	}()
+
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			for category := range job {
+				var count int
+				//fmt.Println(category.Name)
+
+				doc, err := p.LoadPage(category.URL)
+				if err != nil {
+					fmt.Println(err)
+					results.Errors++
+					continue
+				}
+
+				p.GetProducts(doc, category.Name, product, &count)
+
+				mx.Lock()
+				results.Parsed += count
+				mx.Unlock()
+			}
+		}()
+
+	}
+
+	go func() {
+		wg.Wait()
+		close(product)
+	}()
+	workerWG.Wait()
 
 	return nil
 }
