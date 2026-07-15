@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:18.3
+    restart: always
+    env_file:
+      - .env
+    container_name: 'postgresql'
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    ports:
+      - 5433:5432
+
+  parser:
+    build: .
+    env_file:
+      - .env
+    ports: 
+      - ${PORT}:8080
+    depends_on:
+      - postgres
+
+  n8n: 
+    image: n8nio/n8n:latest
+    restart: always
+    ports:
+      - "5678:5678"
+    environment:
+      - TZ=Europe/Moscow
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      - parser
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+volumes:
+  n8n_data:
