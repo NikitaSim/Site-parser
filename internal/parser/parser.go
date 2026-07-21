@@ -24,13 +24,12 @@ type Category struct {
 }
 
 type Product struct {
-	Category    string
-	Title       string
-	Price       *int
-	Info        string
-	Description string
-	Link        string
-	Image       string
+	Category    string `json:"category"`
+    Title       string `json:"title"`
+    Price       *int   `json:"price"`
+    Info        string `json:"info"`
+    Description string `json:"description"`
+    Link        string `json:"link"`
 }
 
 const url = "https://nprommet.ru/"

@@ -8,6 +8,7 @@
 - PostgreSQL
 - Docker
 - Docker Compose
+- Ollama
 - n8n
 
 ## Запуск

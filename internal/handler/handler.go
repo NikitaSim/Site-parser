@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -36,6 +37,60 @@ func (h *Handler) Parser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+}
+
+type Messages struct {
+	Message string `json:"message"`
+}
+
+func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
+
+	var message Messages
+	if err := json.NewDecoder(r.Body).Decode(&message); err != nil {
+		http.Error(w, fmt.Sprint("json read error", err), http.StatusBadRequest)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	resp, err := h.service.Chat(string(message.Message))
+	if err != nil {
+		http.Error(w, fmt.Sprint("Chat error:", err), http.StatusInternalServerError)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	// if resp == "Need Clarification" {
+	// 	w.WriteHeader(http.StatusNoContent)
+	// 	w.Write([]byte(`
+	// 	Уточните запрос пожалуйста используя следующие критерии:
+	// 			Категория товара
+	// 			Название товара
+	// 			Цена товара`))
+	// 	return
+	// }
+	if errors.Is(err, fmt.Errorf("Need Clarification")) {
+		w.Header().Set("Content-type", "application/json")
+		w.WriteHeader(http.StatusNoContent)
+		if err := json.NewEncoder(w).Encode([]byte(`
+		Уточните запрос пожалуйста используя следующие критерии:
+				Категория товара
+				Название товара
+				Цена товара`)); err != nil {
+			http.Error(w, fmt.Sprintf("JSON send error: %s", err), http.StatusInternalServerError)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		return
+	}
+
+	w.Header().Set("Content-type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, fmt.Sprintf("JSON send error: %s", err), http.StatusInternalServerError)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 }
 
 type ResponseWriter struct {

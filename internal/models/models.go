@@ -8,11 +8,35 @@ type ParseResults struct {
 }
 
 type Filters struct {
-	Category string `json:"category"`
-	Name     string `json:"name"`
-	PriceMin *int   `json:"price_min"`
-	PriceMax *int   `json:"price_max"`
+	Categories []string   `json:"categories"`
+	Keywords   [][]string `json:"keywords"`
+	PriceMin   *int       `json:"priceMin"`
+	PriceMax   *int       `json:"priceMax"`
 
 	NeedClarification bool   `json:"needClarification"`
 	Message           string `json:"message"`
+}
+
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type ChatRequest struct {
+	Model    string       `json:"model"`
+	Messages []Message    `json:"messages"`
+	Stream   bool         `json:"stream"`
+	Options  *ChatOptions `json:"options,omitempty"`
+}
+
+type ChatResponse struct {
+	Message struct {
+		Content string `json:"content"`
+	} `json:"message"`
+}
+
+type ChatOptions struct {
+	Temperature float32 `json:"temperature,omitempty"`
+	NumPredict  int     `json:"num_predict,omitempty"`
+	Think       bool    `json:"think,omitempty"`
 }

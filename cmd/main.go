@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"parser/internal/ai"
 	"parser/internal/handler"
 	"parser/internal/parser"
 	"parser/internal/repository"
@@ -19,15 +20,16 @@ func main() {
 
 	dbUrl := os.Getenv("DB_URL")
 	port := os.Getenv("PORT")
+	aiUrl := os.Getenv("AI_URL")
 
 	mux := &http.ServeMux{}
 
 	server := &http.Server{
 		Addr:         ":" + port,
 		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 2 * time.Minute,
-		IdleTimeout:  5 * time.Minute,
+		ReadTimeout:  1 * time.Minute,
+		WriteTimeout: 30 * time.Minute,
+		IdleTimeout:  1 * time.Hour,
 	}
 
 	parser := parser.NewParser()
@@ -36,10 +38,14 @@ func main() {
 		return
 	}
 	defer repo.CloseDB()
-	service := service.NewService(parser, repo)
+	aiChat := ai.NewClient(aiUrl)
+	service := service.NewService(parser, repo, aiChat)
 	handler := handler.NewHandler(service)
 
 	mux.Handle("POST /parse", handler.Chain(http.HandlerFunc(handler.Parser),
+		handler.RecoverMiddleware,
+		handler.LoggingMiddleware))
+	mux.Handle("POST /chat", handler.Chain(http.HandlerFunc(handler.Chat),
 		handler.RecoverMiddleware,
 		handler.LoggingMiddleware))
 
@@ -64,5 +70,4 @@ func main() {
 	} else {
 		fmt.Println("server stop")
 	}
-
 }
