@@ -54,33 +54,18 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	resp, err := h.service.Chat(string(message.Message))
+
+	if errors.Is(err, service.ErrNeedClarification) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Уточните запрос пожалуйста используя следующие критерии:\nКатегория товара\nНазвание товара\nЦена товара",
+		})
+		return
+	}
 	if err != nil {
 		http.Error(w, fmt.Sprint("Chat error:", err), http.StatusInternalServerError)
 		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	// if resp == "Need Clarification" {
-	// 	w.WriteHeader(http.StatusNoContent)
-	// 	w.Write([]byte(`
-	// 	Уточните запрос пожалуйста используя следующие критерии:
-	// 			Категория товара
-	// 			Название товара
-	// 			Цена товара`))
-	// 	return
-	// }
-	if errors.Is(err, fmt.Errorf("Need Clarification")) {
-		w.Header().Set("Content-type", "application/json")
-		w.WriteHeader(http.StatusNoContent)
-		if err := json.NewEncoder(w).Encode([]byte(`
-		Уточните запрос пожалуйста используя следующие критерии:
-				Категория товара
-				Название товара
-				Цена товара`)); err != nil {
-			http.Error(w, fmt.Sprintf("JSON send error: %s", err), http.StatusInternalServerError)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
 		return
 	}
 

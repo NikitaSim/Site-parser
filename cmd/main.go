@@ -35,6 +35,7 @@ func main() {
 	parser := parser.NewParser()
 	repo, err := repository.NewRepo(dbUrl)
 	if err != nil {
+		fmt.Println("DB connection error", err)
 		return
 	}
 	defer repo.CloseDB()

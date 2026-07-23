@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -13,6 +14,8 @@ import (
 )
 
 const workerCount = 3
+
+var ErrNeedClarification = errors.New("need clarification")
 
 type AICompareRequest struct {
 	Query    string           `json:"user_query"`
@@ -58,7 +61,7 @@ func (s *parserService) Chat(message string) ([]parser.Product, error) {
 	}
 
 	if filter.NeedClarification {
-		return nil, fmt.Errorf("Need Clarification")
+		return nil, ErrNeedClarification
 	}
 	filter.Message = message
 	fmt.Println(filter)
