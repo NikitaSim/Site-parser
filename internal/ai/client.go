@@ -23,6 +23,7 @@ func NewClient(url string) *Client {
 	}
 }
 
+// Скелет запроса в LLM
 func (c *Client) Chat(prompt, systemPrompt string) (string, error) {
 
 	reqBody := models.ChatRequest{
@@ -65,6 +66,6 @@ func (c *Client) Chat(prompt, systemPrompt string) (string, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", fmt.Errorf("Decode results error %s", err)
 	}
-	fmt.Println("AI sloy", result.Message.Content)
+
 	return result.Message.Content, nil
 }

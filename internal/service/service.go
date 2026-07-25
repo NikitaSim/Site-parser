@@ -23,11 +23,6 @@ type AICompareRequest struct {
 	Level    int              `json:"level"`
 }
 
-type AICompareResponse struct {
-	Level   int              `json:"Level"`
-	Results []parser.Product `json:"results"`
-}
-
 type Service interface {
 	Parse() (*models.ParseResults, error)
 	Chat(string) ([]parser.Product, error)
@@ -64,7 +59,7 @@ func (s *parserService) Chat(message string) ([]parser.Product, error) {
 		return nil, ErrNeedClarification
 	}
 	filter.Message = message
-	fmt.Println(filter)
+	//fmt.Println(filter)
 
 	products, err := s.repo.GetProducts(filter)
 
@@ -97,10 +92,10 @@ func (s *parserService) Chat(message string) ([]parser.Product, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Description filter error: %s", err)
 	}
-	fmt.Println("Продукты под фильтры:")
-	for _, pr := range filterProduct {
-		fmt.Println(pr)
-	}
+	// fmt.Println("Продукты под фильтры:")
+	// for _, pr := range filterProduct {
+	// 	fmt.Println(pr)
+	// }
 
 	return filterProduct, nil
 }
@@ -150,7 +145,7 @@ func (s *parserService) DescriptionFilter(products []parser.Product, query strin
 					wg.Done()
 					continue
 				}
-				fmt.Println("test_1: ", resp)
+				//fmt.Println("Test_1: ", resp)
 
 				resp = NormalizeJSON(resp)
 
@@ -161,20 +156,9 @@ func (s *parserService) DescriptionFilter(products []parser.Product, query strin
 					wg.Done()
 					continue
 				}
-				fmt.Println("Tets_2: ", products)
+				//fmt.Println("Tets_2: ", products)
 				result <- products
 
-				// var aiResp AICompareResponse
-
-				// if err := json.Unmarshal([]byte(resp), &aiResp); err != nil {
-				// 	fmt.Println(err)
-				// 	wg.Done()
-				// 	continue
-				// }
-
-				// fmt.Println("Tets_2: ", products)
-
-				// result <- aiResp.Results
 			}
 		}()
 	}
@@ -273,6 +257,7 @@ func NormalizeJSON(resp string) string {
 	return strings.TrimSpace(resp[start : end+1])
 }
 
+// Сохранение товаров в БД
 func (s *parserService) batchWorker(in <-chan parser.Product, results *models.ParseResults, mx *sync.Mutex) error {
 
 	buffer := make([]parser.Product, 0, 100)
@@ -318,6 +303,7 @@ func (s *parserService) Parse() (*models.ParseResults, error) {
 
 	var wg sync.WaitGroup
 	wg.Add(workerCount)
+	// Очистка перед обновлением
 	if err := s.repo.ClearData(); err != nil {
 		return nil, fmt.Errorf("Clear DB error: %s", err)
 	}

@@ -25,11 +25,11 @@ type Category struct {
 
 type Product struct {
 	Category    string `json:"category"`
-    Title       string `json:"title"`
-    Price       *int   `json:"price"`
-    Info        string `json:"info"`
-    Description string `json:"description"`
-    Link        string `json:"link"`
+	Title       string `json:"title"` // Название товара
+	Price       *int   `json:"price"`
+	Info        string `json:"info"`        // Краткое описание с карточки
+	Description string `json:"description"` // Полное описание товара
+	Link        string `json:"link"`
 }
 
 const url = "https://nprommet.ru/"
@@ -52,6 +52,7 @@ func (p *siteParser) GetDescription(url string) (string, error) {
 	return text, nil
 }
 
+// Загрузка страницы сайта
 func (p *siteParser) LoadPage(url string) (*goquery.Document, error) {
 
 	resp, err := http.Get(url)
@@ -115,7 +116,6 @@ func (p *siteParser) GetProducts(doc *goquery.Document, category string, product
 		(*count)++
 	})
 
-	//return products
 }
 
 func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) error {
@@ -130,10 +130,10 @@ func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) erro
 	var wg sync.WaitGroup
 	var mx sync.Mutex
 
-	product := make(chan Product, 32) //16
+	product := make(chan Product, 32)
 	var workerWG sync.WaitGroup
 
-	for i := 0; i < 15; i++ { //10
+	for i := 0; i < 15; i++ { // Количество воркеров для получения описания товара
 		workerWG.Add(1)
 		go func() {
 			defer workerWG.Done()
@@ -160,7 +160,7 @@ func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) erro
 		}
 	}()
 
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 4; i++ { // Воркеры для получения товара по каждой категории
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

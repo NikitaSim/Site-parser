@@ -23,8 +23,6 @@ type postgresDB struct {
 	dbUrl string
 }
 
-//const dbConfig = "postgres://user:password@localhost:5433/postgres"
-
 func NewRepo(dbUrl string) (*postgresDB, error) {
 	ctx := context.Background()
 	conn, err := pgxpool.New(ctx, dbUrl)
@@ -41,6 +39,7 @@ func (db *postgresDB) CloseDB() {
 	db.conn.Close()
 }
 
+// сохранения одного товара
 func (db *postgresDB) SaveProduct(product parser.Product) error {
 
 	query := `
@@ -63,6 +62,7 @@ func (db *postgresDB) SaveProduct(product parser.Product) error {
 	return nil
 }
 
+// Батчевое сохранения товаров
 func (db *postgresDB) SaveBuffer(products []parser.Product) error {
 
 	query := "INSERT INTO product (product_name, category, price, info, product_description, link) VALUES \n"
@@ -188,8 +188,8 @@ WHERE 1=1
 
 	query += " LIMIT 50"
 
-	fmt.Println(query)
-	fmt.Println(args)
+	// fmt.Println(query)
+	// fmt.Println(args)
 
 	ctx := context.Background()
 

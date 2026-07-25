@@ -100,7 +100,7 @@ Health-check есть у `postgres` (`pg_isready`) и `n8n` (`wget --spider /hea
 ├── go.mod / go.sum
 ├── init.sql                     # схема БД
 ├── cmd/
-│   └──main.go (main package)   # композиция зависимостей, HTTP-сервер, graceful shutdown
+│   └──main.go (main package)    # композиция зависимостей, HTTP-сервер, graceful shutdown
 └── internal/
     ├── handler/
     │   └── handler.go           # HTTP-хендлеры + middleware (логирование, recover)

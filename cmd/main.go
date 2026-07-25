@@ -18,6 +18,7 @@ import (
 
 func main() {
 
+	// Взятие переменных окружения
 	dbUrl := os.Getenv("DB_URL")
 	port := os.Getenv("PORT")
 	aiUrl := os.Getenv("AI_URL")
@@ -32,6 +33,7 @@ func main() {
 		IdleTimeout:  1 * time.Hour,
 	}
 
+	// Создание зависимостей
 	parser := parser.NewParser()
 	repo, err := repository.NewRepo(dbUrl)
 	if err != nil {
@@ -54,7 +56,7 @@ func main() {
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		fmt.Println("http://localhost:8080")
+		//fmt.Println("http://localhost:8080")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			panic(err)
 		}

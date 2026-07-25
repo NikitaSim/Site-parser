@@ -78,6 +78,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Кастомный ResponseWriter для логирования запросов
 type ResponseWriter struct {
 	Status int
 	http.ResponseWriter
@@ -119,6 +120,7 @@ func (h *Handler) RecoverMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// Сборка Middleware в одну цепочку
 func (h *Handler) Chain(handler http.Handler, middlewares ...func(next http.Handler) http.Handler) http.Handler {
 	for i := len(middlewares) - 1; i >= 0; i-- {
 		handler = middlewares[i](handler)

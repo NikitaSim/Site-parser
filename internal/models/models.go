@@ -1,5 +1,6 @@
 package models
 
+// Метрики парсинга
 type ParseResults struct {
 	Categories int `json:"categories"`
 	Parsed     int `json:"parsed"`
@@ -7,6 +8,7 @@ type ParseResults struct {
 	Errors     int `json:"errors"`
 }
 
+// Фильтры для товаров
 type Filters struct {
 	Categories []string   `json:"categories"`
 	Keywords   [][]string `json:"keywords"`
