@@ -22,3 +22,14 @@ func TestProduct(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestSoft404(t *testing.T) {
+	_, err := extract([]byte("<html><title>404 Not Found</title></html>"))
+	if err != errPageGone {
+		t.Fatalf("expected removed page, got %v", err)
+	}
+	_, err = extract([]byte("<html><title>GROHE</title></html>"))
+	if err == nil || err == errPageGone {
+		t.Fatalf("expected extraction error, got %v", err)
+	}
+}
