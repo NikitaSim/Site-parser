@@ -21,7 +21,7 @@ import (
 	"parser/internal/models"
 )
 
-const parserWorkerCount = 32
+const parserWorkerCount = 64
 
 type Parser interface {
 	Parse(chan<- Product, *models.ParseResults) error
@@ -39,7 +39,7 @@ type Product struct {
 }
 
 func NewParser() *siteParser {
-	return &siteParser{client: &http.Client{Timeout: 40 * time.Second}}
+	return &siteParser{client: &http.Client{Timeout: 15 * time.Second}}
 }
 
 func (p *siteParser) fetch(ctx context.Context, address string) ([]byte, error) {
