@@ -189,10 +189,11 @@ WHERE 1=1
 			query += fmt.Sprintf("category ILIKE $%d", len(args)+1)
 			args = append(args, "%"+category+"%")
 		}
-		if !addedCategory {
+		if addedCategory {
+			query += ")"
+		} else {
 			query = strings.TrimSuffix(query, " AND (")
 		}
-		query += ")"
 	}
 
 	for _, group := range keywordGroups {
