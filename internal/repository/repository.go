@@ -19,8 +19,7 @@ type Repository interface {
 	SaveBuffer([]parser.Product) error
 	GetProducts(models.Filters) ([]parser.Product, error)
 	CloseDB()
-	ClearData() error
-}
+	}
 
 type postgresDB struct {
 	conn *pgxpool.Pool
@@ -68,6 +67,20 @@ func NewRepo(dbURL string) (*postgresDB, error) {
 	if _, err := conn.Exec(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_product_link_unique ON product(link)`); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("create unique product link index: %w", err)
+	}
+	if _, err := conn.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS pg_trgm`); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("enable pg_trgm: %w", err)
+	}
+	for _, indexQuery := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_product_name_trgm ON product USING GIN (product_name gin_trgm_ops)`,
+		`CREATE INDEX IF NOT EXISTS idx_product_description_trgm ON product USING GIN (product_description gin_trgm_ops)`,
+		`CREATE INDEX IF NOT EXISTS idx_product_info_trgm ON product USING GIN (info gin_trgm_ops)`,
+	} {
+		if _, err := conn.Exec(ctx, indexQuery); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("create trigram index: %w", err)
+		}
 	}
 
 	return &postgresDB{conn: conn}, nil
@@ -126,22 +139,16 @@ func (db *postgresDB) SaveBuffer(products []parser.Product) error {
 			category = EXCLUDED.category,
 			price = EXCLUDED.price,
 			info = EXCLUDED.info,
-			product_description = EXCLUDED.product_description`)
+			product_description = EXCLUDED.product_description
+			WHERE product.product_name IS DISTINCT FROM EXCLUDED.product_name
+			   OR product.category IS DISTINCT FROM EXCLUDED.category
+			   OR product.price IS DISTINCT FROM EXCLUDED.price
+			   OR product.info IS DISTINCT FROM EXCLUDED.info
+			   OR product.product_description IS DISTINCT FROM EXCLUDED.product_description`)
 
 		if _, err := db.conn.Exec(ctx, query.String(), args...); err != nil {
 			return fmt.Errorf("upsert product batch [%d:%d]: %w", start, end, err)
 		}
-	}
-	return nil
-}
-
-// ClearData is retained for explicit administrative use. Catalogue imports
-// intentionally do not call it: a failed import must not erase good data.
-func (db *postgresDB) ClearData() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if _, err := db.conn.Exec(ctx, "TRUNCATE TABLE product"); err != nil {
-		return fmt.Errorf("truncate product table: %w", err)
 	}
 	return nil
 }
@@ -192,7 +199,7 @@ WHERE 1=1
 		args = append(args, *filter.PriceMax)
 	}
 
-	query += " ORDER BY product_name LIMIT 200"
+	query += " ORDER BY product_name LIMIT 60"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
