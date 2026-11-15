@@ -7,16 +7,18 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"github.com/PuerkitoBio/goquery"
 	"io"
 	"log"
 	"math/big"
 	"net/http"
 	"net/url"
-	"parser/internal/models"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
+
+	"parser/internal/models"
 )
 
 const parserWorkerCount = 8
