@@ -169,7 +169,6 @@ func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) erro
 	parsed, failed := 0, 0
 	categories := make(map[string]struct{})
 	// One shared ticker limits the total request rate across all workers.
-	
 
 	wg.Add(parserWorkerCount)
 	for i := 0; i < parserWorkerCount; i++ {
