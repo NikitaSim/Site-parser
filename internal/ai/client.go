@@ -13,7 +13,7 @@ import (
 )
 
 type ClientService interface {
-	Chat(string, string) (string, error)
+	Chat(string, string, map[string]any) (string, error)
 }
 
 type Client struct {
@@ -24,11 +24,12 @@ type Client struct {
 func NewClient(url string) *Client {
 	return &Client{
 		url:    strings.TrimRight(strings.TrimSpace(url), "/"),
+		// Keep the existing Ollama HTTP timeout unchanged.
 		client: &http.Client{Timeout: 30 * time.Minute},
 	}
 }
 
-func (c *Client) Chat(prompt, systemPrompt string) (string, error) {
+func (c *Client) Chat(prompt, systemPrompt string, format map[string]any) (string, error) {
 	if c.url == "" {
 		return "", fmt.Errorf("AI_URL is empty")
 	}
@@ -36,6 +37,7 @@ func (c *Client) Chat(prompt, systemPrompt string) (string, error) {
 	requestBody := models.ChatRequest{
 		Model:  "qwen3:8b",
 		Stream: false,
+		Format: format,
 		Messages: []models.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: prompt},
@@ -43,8 +45,8 @@ func (c *Client) Chat(prompt, systemPrompt string) (string, error) {
 		Options: &models.ChatOptions{
 			Temperature: 0,
 			NumPredict:  2048,
-			Think:       false,
 		},
+		Think: false,
 	}
 
 	payload, err := json.Marshal(requestBody)
