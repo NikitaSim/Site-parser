@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"io"
@@ -53,6 +54,9 @@ func (p *siteParser) fetch(ctx context.Context, address string) ([]byte, error) 
 		return nil, e
 	}
 	defer r.Body.Close()
+	if r.StatusCode == http.StatusNotFound || r.StatusCode == http.StatusGone {
+		return nil, errPageGone
+	}
 	if r.StatusCode != 200 {
 		return nil, fmt.Errorf("HTTP %d: %s", r.StatusCode, address)
 	}
@@ -70,6 +74,8 @@ type product struct {
 	} `json:"offers"`
 }
 
+var errPageGone = errors.New("страница товара удалена")
+
 func extract(body []byte) (product, error) {
 	d, e := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
 	if e != nil {
@@ -83,6 +89,9 @@ func extract(body []byte) (product, error) {
 		}
 	})
 	if p.Name == "" {
+		if strings.EqualFold(strings.TrimSpace(d.Find("title").First().Text()), "404 Not Found") {
+			return p, errPageGone
+		}
 		return p, fmt.Errorf("Product JSON-LD absent")
 	}
 	return p, nil
@@ -133,6 +142,9 @@ func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) erro
 				}
 				if e != nil {
 					log.Printf("GROHE %s: %v", address, e)
+					if errors.Is(e, errPageGone) {
+						continue
+					}
 					mx.Lock()
 					failed++
 					mx.Unlock()
@@ -154,6 +166,9 @@ func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) erro
 	results.Parsed += parsed
 	results.Categories += len(categories)
 	// Errors is owned by the service, avoiding concurrent metric writes.
+	if parsed == 0 {
+		return fmt.Errorf("GROHE: no products parsed from %d URLs", len(addresses))
+	}
 	if failed > 0 {
 		return fmt.Errorf("GROHE: %d failed pages of %d", failed, len(addresses))
 	}
