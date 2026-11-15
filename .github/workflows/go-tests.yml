@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - refactor/grohe-pipeline-batch
+      - refactor/grohe-category-pipeline
   pull_request:
     branches:
       - main
