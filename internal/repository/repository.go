@@ -199,7 +199,25 @@ WHERE 1=1
 		args = append(args, *filter.PriceMax)
 	}
 
-	query += " ORDER BY product_name LIMIT 60"
+	// Use trigram similarity to put the most promising candidates first.
+	// ILIKE remains the filter; similarity is used for ranking the survivors.
+	scoreTerms := make([]string, 0)
+	for _, group := range filter.Keywords {
+		for _, word := range group {
+			placeholder := len(args) + 1
+			scoreTerms = append(scoreTerms, fmt.Sprintf(
+				"GREATEST(similarity(COALESCE(product_name, ''), $%d), similarity(COALESCE(product_description, ''), $%d), similarity(COALESCE(info, ''), $%d))",
+				placeholder, placeholder, placeholder,
+			))
+			args = append(args, word)
+		}
+	}
+	if len(scoreTerms) > 0 {
+		query += " ORDER BY (" + strings.Join(scoreTerms, " + ") + ") DESC, product_name"
+	} else {
+		query += " ORDER BY product_name"
+	}
+	query += " LIMIT 60"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
