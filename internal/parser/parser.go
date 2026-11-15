@@ -21,7 +21,10 @@ import (
 	"parser/internal/models"
 )
 
-const parserWorkerCount = 32
+const (
+	categoryWorkerCount = 4
+	productWorkerCount  = 15
+)
 
 type Parser interface {
 	Parse(chan<- Product, *models.ParseResults) error
@@ -38,7 +41,18 @@ type Product struct {
 	Link        string `json:"link"`
 }
 
+type category struct {
+	name string
+	urls []string
+}
+
+type productJob struct {
+	category string
+	url      string
+}
+
 func NewParser() *siteParser {
+	// Keep the existing HTTP timeout unchanged.
 	return &siteParser{client: &http.Client{Timeout: 40 * time.Second}}
 }
 
@@ -86,7 +100,7 @@ func (p *siteParser) fetch(ctx context.Context, address string) ([]byte, error) 
 	return body, nil
 }
 
-type product struct {
+type productJSONLD struct {
 	Type        string `json:"@type"`
 	Name        string `json:"name"`
 	SKU         string `json:"sku"`
@@ -99,20 +113,19 @@ type product struct {
 
 var errPageGone = errors.New("страница товара удалена")
 
-func extract(body []byte) (product, error) {
+func extract(body []byte) (productJSONLD, error) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err != nil {
-		return product{}, fmt.Errorf("parse product HTML: %w", err)
+		return productJSONLD{}, fmt.Errorf("parse product HTML: %w", err)
 	}
 
-	var found product
+	var found productJSONLD
 	doc.Find(`script[type="application/ld+json"]`).Each(func(_ int, script *goquery.Selection) {
 		if found.Name != "" {
 			return
 		}
-		raw := strings.TrimSpace(script.Text())
-		var candidate product
-		if json.Unmarshal([]byte(raw), &candidate) == nil &&
+		var candidate productJSONLD
+		if json.Unmarshal([]byte(strings.TrimSpace(script.Text())), &candidate) == nil &&
 			candidate.Type == "Product" && candidate.Name != "" {
 			found = candidate
 		}
@@ -120,138 +133,45 @@ func extract(body []byte) (product, error) {
 	if found.Name != "" {
 		return found, nil
 	}
-
 	if strings.EqualFold(strings.TrimSpace(doc.Find("title").First().Text()), "404 Not Found") {
-		return product{}, errPageGone
+		return productJSONLD{}, errPageGone
 	}
-	return product{}, fmt.Errorf("Product JSON-LD absent")
+	return productJSONLD{}, fmt.Errorf("Product JSON-LD absent")
 }
 
-func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
-	defer cancel()
-
-	body, err := p.fetch(ctx, "https://grohe-russia.shop/sitemap.xml")
+func categoryFromURL(address string) (string, error) {
+	u, err := url.Parse(address)
 	if err != nil {
-		return fmt.Errorf("fetch sitemap: %w", err)
+		return "", err
 	}
-
-	var sitemap struct {
-		URLs []struct {
-			Loc string `xml:"loc"`
-		} `xml:"url"`
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return "", fmt.Errorf("product URL has no category: %s", address)
 	}
-	if err := xml.Unmarshal(body, &sitemap); err != nil {
-		return fmt.Errorf("decode sitemap: %w", err)
+	names := map[string]string{
+		"vannaya": "Ванная", "dush": "Душ", "kuhnja": "Кухня",
+		"kitchen": "Кухня", "wc": "Туалет", "aksessuary": "Аксессуары",
+		"nabory": "Наборы", "kollektsii": "Коллекции",
+		"bytovaya-tehnika": "Бытовая техника",
 	}
-
-	addresses := make([]string, 0, len(sitemap.URLs))
-	seen := make(map[string]struct{}, len(sitemap.URLs))
-	for _, entry := range sitemap.URLs {
-		u, err := url.Parse(entry.Loc)
-		if err != nil || u.Scheme != "https" || u.Host != "grohe-russia.shop" ||
-			u.RawQuery != "" || !strings.HasSuffix(u.Path, ".html") {
-			continue
-		}
-		if _, exists := seen[entry.Loc]; exists {
-			continue
-		}
-		seen[entry.Loc] = struct{}{}
-		addresses = append(addresses, entry.Loc)
+	if name, ok := names[parts[0]]; ok {
+		return name, nil
 	}
-	if len(addresses) == 0 {
-		return fmt.Errorf("no product URLs found in sitemap")
-	}
-
-	jobs := make(chan string, parserWorkerCount*2)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	parsed, failed := 0, 0
-	categories := make(map[string]struct{})
-	// One shared ticker limits the total request rate across all workers.
-	limiter := time.NewTicker(150 * time.Millisecond)
-	defer limiter.Stop()
-
-	wg.Add(parserWorkerCount)
-	for i := 0; i < parserWorkerCount; i++ {
-		go func() {
-			defer wg.Done()
-			for address := range jobs {
-				select {
-				case <-ctx.Done():
-					return
-				case <-limiter.C:
-				}
-
-				page, fetchErr := p.fetch(ctx, address)
-				var item Product
-				if fetchErr == nil {
-					item, fetchErr = parseProduct(page, address)
-				}
-				if fetchErr != nil {
-					if errors.Is(fetchErr, errPageGone) {
-						log.Printf("GROHE page skipped (removed): %s", address)
-						continue
-					}
-					log.Printf("GROHE parse failed %s: %v", address, fetchErr)
-					mu.Lock()
-					failed++
-					results.Errors++
-					mu.Unlock()
-					continue
-				}
-
-				select {
-				case ch <- item:
-					mu.Lock()
-					parsed++
-					categories[item.Category] = struct{}{}
-					mu.Unlock()
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-	}
-
-sendJobs:
-	for _, address := range addresses {
-		select {
-		case jobs <- address:
-		case <-ctx.Done():
-			break sendJobs
-		}
-	}
-	close(jobs)
-	wg.Wait()
-
-	results.Parsed += parsed
-	results.Categories += len(categories)
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("GROHE import cancelled: %w", err)
-	}
-	if parsed == 0 {
-		return fmt.Errorf("GROHE: no products parsed from %d URLs", len(addresses))
-	}
-	if failed > 0 {
-		return fmt.Errorf("GROHE: %d pages failed out of %d URLs", failed, len(addresses))
-	}
-	return nil
+	return parts[0], nil
 }
 
-func parseProduct(body []byte, address string) (Product, error) {
+func parseProduct(body []byte, address, categoryName string) (Product, error) {
 	data, err := extract(body)
 	if err != nil {
 		return Product{}, err
 	}
-
 	item := Product{
-		Title:       strings.TrimSpace(data.Name),
+		Category: categoryName,
+		Title: strings.TrimSpace(data.Name),
 		Description: strings.TrimSpace(data.Description),
-		Info:        strings.TrimSpace("Артикул: " + data.SKU),
-		Link:        address,
+		Info: strings.TrimSpace("Артикул: " + data.SKU),
+		Link: address,
 	}
-
 	if data.Offers.Price != "" {
 		price, ok := new(big.Rat).SetString(string(data.Offers.Price))
 		if !ok || !price.IsInt() || !price.Num().IsInt64() ||
@@ -262,26 +182,145 @@ func parseProduct(body []byte, address string) (Product, error) {
 		value := int(price.Num().Int64())
 		item.Price = &value
 	}
-
-	u, err := url.Parse(address)
-	if err != nil {
-		return Product{}, err
-	}
-	slug := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(slug) > 0 {
-		item.Category = slug[0]
-	}
-	categoryNames := map[string]string{
-		"vannaya":    "Ванная",
-		"dush":       "Душ",
-		"kuhnja":     "Кухня",
-		"kitchen":    "Кухня",
-		"wc":         "Туалет",
-		"aksessuary": "Аксессуары",
-		"nabory":     "Наборы",
-	}
-	if name, ok := categoryNames[item.Category]; ok {
-		item.Category = name
-	}
 	return item, nil
+}
+
+func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) error {
+	// Keep the existing overall parse timeout unchanged.
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+	defer cancel()
+
+	body, err := p.fetch(ctx, "https://grohe-russia.shop/sitemap.xml")
+	if err != nil {
+		return fmt.Errorf("fetch sitemap: %w", err)
+	}
+	var sitemap struct {
+		URLs []struct { Loc string `xml:"loc"` } `xml:"url"`
+	}
+	if err := xml.Unmarshal(body, &sitemap); err != nil {
+		return fmt.Errorf("decode sitemap: %w", err)
+	}
+
+	// Stage 1: collect and group product URLs by category (like the previous
+	// parser's category discovery stage). The sitemap remains the source of truth
+	// for URLs, avoiding fragile assumptions about client-rendered product cards.
+	grouped := make(map[string][]string)
+	seen := make(map[string]struct{}, len(sitemap.URLs))
+	for _, entry := range sitemap.URLs {
+		u, parseErr := url.Parse(entry.Loc)
+		if parseErr != nil || u.Scheme != "https" || u.Host != "grohe-russia.shop" ||
+			u.RawQuery != "" || !strings.HasSuffix(u.Path, ".html") {
+			continue
+		}
+		if _, exists := seen[entry.Loc]; exists {
+			continue
+		}
+		seen[entry.Loc] = struct{}{}
+		name, categoryErr := categoryFromURL(entry.Loc)
+		if categoryErr != nil {
+			continue
+		}
+		grouped[name] = append(grouped[name], entry.Loc)
+	}
+	if len(grouped) == 0 {
+		return fmt.Errorf("no product URLs found in sitemap")
+	}
+	categories := make([]category, 0, len(grouped))
+	for name, addresses := range grouped {
+		categories = append(categories, category{name: name, urls: addresses})
+	}
+
+	// A single limiter is shared by all product workers.
+	limiter := time.NewTicker(150 * time.Millisecond)
+	defer limiter.Stop()
+	categoryJobs := make(chan category)
+	productJobs := make(chan productJob, productWorkerCount*2)
+	var categoryWG, productWG sync.WaitGroup
+	var mu sync.Mutex
+	parsed, failed := 0, 0
+
+	// Stage 2: category workers fan out product-page jobs.
+	categoryWG.Add(categoryWorkerCount)
+	for i := 0; i < categoryWorkerCount; i++ {
+		go func() {
+			defer categoryWG.Done()
+			for cat := range categoryJobs {
+				for _, address := range cat.urls {
+					select {
+					case productJobs <- productJob{category: cat.name, url: address}:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}()
+	}
+	go func() {
+		for _, cat := range categories {
+			select {
+			case categoryJobs <- cat:
+			case <-ctx.Done():
+				close(categoryJobs)
+				categoryWG.Wait()
+				close(productJobs)
+				return
+			}
+		}
+		close(categoryJobs)
+		categoryWG.Wait()
+		close(productJobs)
+	}()
+
+	// Stage 3: product workers load and parse each individual product page.
+	productWG.Add(productWorkerCount)
+	for i := 0; i < productWorkerCount; i++ {
+		go func() {
+			defer productWG.Done()
+			for job := range productJobs {
+				select {
+				case <-ctx.Done():
+					return
+				case <-limiter.C:
+				}
+				page, fetchErr := p.fetch(ctx, job.url)
+				var item Product
+				if fetchErr == nil {
+					item, fetchErr = parseProduct(page, job.url, job.category)
+				}
+				if fetchErr != nil {
+					if errors.Is(fetchErr, errPageGone) {
+						continue
+					}
+					log.Printf("GROHE parse failed %s: %v", job.url, fetchErr)
+					mu.Lock()
+					failed++
+					mu.Unlock()
+					continue
+				}
+				select {
+				case ch <- item:
+					mu.Lock()
+					parsed++
+					mu.Unlock()
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+	productWG.Wait()
+
+	results.Categories += len(categories)
+	results.Parsed += parsed
+	results.Errors += failed
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("GROHE import cancelled: %w", err)
+	}
+	if parsed == 0 {
+		return fmt.Errorf("GROHE: no products parsed from %d URLs", len(seen))
+	}
+	if failed > 0 {
+		return fmt.Errorf("GROHE: %d product pages failed out of %d URLs", failed, len(seen))
+	}
+	return nil
 }
