@@ -161,7 +161,7 @@ WHERE 1=1
 `
 	args := make([]any, 0)
 	keywordGroups := make([][]string, 0, len(filter.Keywords))
-	for _, group := range keywordGroups {
+	for _, group := range filter.Keywords {
 		clean := make([]string, 0, len(group))
 		for _, word := range group {
 			word = strings.TrimSpace(word)
@@ -176,12 +176,21 @@ WHERE 1=1
 
 	if len(filter.Categories) > 0 {
 		query += " AND ("
-		for i, category := range filter.Categories {
-			if i > 0 {
+		addedCategory := false
+		for _, category := range filter.Categories {
+			category = strings.TrimSpace(category)
+			if category == "" {
+				continue
+			}
+			if addedCategory {
 				query += " OR "
 			}
+			addedCategory = true
 			query += fmt.Sprintf("category ILIKE $%d", len(args)+1)
 			args = append(args, "%"+category+"%")
+		}
+		if !addedCategory {
+			query = strings.TrimSuffix(query, " AND (")
 		}
 		query += ")"
 	}
@@ -215,7 +224,7 @@ WHERE 1=1
 	// Use trigram similarity to put the most promising candidates first.
 	// ILIKE remains the filter; similarity is used for ranking the survivors.
 	scoreTerms := make([]string, 0)
-	for _, group := range filter.Keywords {
+	for _, group := range keywordGroups {
 		for _, word := range group {
 			placeholder := len(args) + 1
 			scoreTerms = append(scoreTerms, fmt.Sprintf(
