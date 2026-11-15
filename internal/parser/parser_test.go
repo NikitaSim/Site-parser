@@ -18,7 +18,7 @@ func TestParseProduct(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			body := []byte("<script type=\"application/ld+json\">{\"@type\":\"Product\",\"name\":\"Товар\",\"sku\":\"123\",\"description\":\"Описание\",\"offers\":{\"price\":\"" + test.price + "\",\"priceCurrency\":\"RUB\"}}</script>")
-			product, err := parseProduct(body, "https://grohe-russia.shop/wc/test.html")
+			product, err := parseProduct(body, "https://grohe-russia.shop/wc/test.html", "Туалет")
 			if (err == nil) != test.valid {
 				t.Fatalf("price %s: unexpected error: %v", test.price, err)
 			}
@@ -45,5 +45,21 @@ func TestExtractSoft404(t *testing.T) {
 	_, err := extract([]byte("<html><title>404 Not Found</title></html>"))
 	if err != errPageGone {
 		t.Fatalf("expected removed page error, got %v", err)
+	}
+}
+
+func TestCategoryFromURL(t *testing.T) {
+	got, err := categoryFromURL("https://grohe-russia.shop/vannaya/smesitel.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Ванная" {
+		t.Fatalf("expected category Ванная, got %q", got)
+	}
+}
+
+func TestCategoryFromURLRejectsRoot(t *testing.T) {
+	if _, err := categoryFromURL("https://grohe-russia.shop/"); err == nil {
+		t.Fatal("expected error for root URL")
 	}
 }
