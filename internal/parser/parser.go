@@ -194,6 +194,7 @@ func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) erro
 					log.Printf("GROHE parse failed %s: %v", address, fetchErr)
 					mu.Lock()
 					failed++
+					results.Errors++
 					mu.Unlock()
 					continue
 				}
