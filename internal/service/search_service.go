@@ -148,6 +148,7 @@ func (s *searchService) rerankBatch(products []parser.Product, query string) []p
 
 	response, err := s.aiChat.Chat(string(body), ai.RerankPrompt)
 	if err != nil {
+		// Preserve the SQL result if the model is unavailable.
 		return products
 	}
 
@@ -173,8 +174,7 @@ func (s *searchService) rerankBatch(products []parser.Product, query string) []p
 		seen[link] = struct{}{}
 		result = append(result, product)
 	}
-	if len(result) == 0 {
-		return products
-	}
+	// An explicit empty links array means that the model found no relevant
+	// product. Return it as-is; only malformed/failed responses fall back.
 	return result
 }
