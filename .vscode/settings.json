@@ -10,6 +10,16 @@
             "username": "admin",
             "password": "password",
             "database": "products"
+        },
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5433,
+            "driver": "PostgreSQL",
+            "name": "products_DB",
+            "database": "poducts",
+            "username": "admin"
         }
     ]
 }
