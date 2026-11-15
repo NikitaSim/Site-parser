@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"encoding/xml"
@@ -49,9 +50,18 @@ func (p *siteParser) fetch(ctx context.Context, address string) ([]byte, error) 
 		return nil, e
 	}
 	req.Header.Set("User-Agent", "SiteParser-Grohe/1.0")
-	r, e := p.client.Do(req)
-	if e != nil {
-		return nil, e
+	// Повторяем временные ошибки шлюза. Постоянные ответы обрабатываем сразу.
+	var r *http.Response
+	for attempt := 0; attempt < 3; attempt++ {
+		r, e = p.client.Do(req)
+		if e != nil {
+			return nil, e
+		}
+		if attempt == 2 || (r.StatusCode != 502 && r.StatusCode != 503 && r.StatusCode != 504) {
+			break
+		}
+		r.Body.Close()
+		time.Sleep(time.Duration(attempt+1) * time.Second)
 	}
 	defer r.Body.Close()
 	if r.StatusCode == http.StatusNotFound || r.StatusCode == http.StatusGone {
@@ -77,7 +87,26 @@ type product struct {
 var errPageGone = errors.New("страница товара удалена")
 
 func extract(body []byte) (product, error) {
-	d, e := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
+	// В стандартной карточке GROHE JSON-LD доступен без построения дерева всей страницы.
+	rest := body
+	marker := []byte("<script type=application/ld+json>")
+	for {
+		pos := bytes.Index(rest, marker)
+		if pos < 0 {
+			break
+		}
+		rest = rest[pos+len(marker):]
+		end := bytes.Index(rest, []byte("</script>"))
+		if end < 0 {
+			break
+		}
+		var item product
+		if json.Unmarshal(rest[:end], &item) == nil && item.Type == "Product" && item.Name != "" {
+			return item, nil
+		}
+		rest = rest[end+len("</script>"):]
+	}
+	d, e := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if e != nil {
 		return product{}, e
 	}
@@ -127,14 +156,12 @@ func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) erro
 	var mx sync.Mutex
 	parsed, failed := 0, 0
 	categories := map[string]bool{}
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-	for i := 0; i < 4; i++ {
+	// Ограничиваем число одновременных загрузок карточек.
+	for i := 0; i < 64; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for address := range jobs {
-				<-ticker.C
 				b, e := p.fetch(context.Background(), address)
 				var item Product
 				if e == nil {
