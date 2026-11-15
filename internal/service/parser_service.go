@@ -6,6 +6,7 @@ import (
 	"parser/internal/models"
 	"parser/internal/parser"
 	"parser/internal/repository"
+	"sync"
 )
 
 const importBatchSize = 1000
@@ -13,6 +14,7 @@ const importBatchSize = 1000
 type parserService struct {
 	parser parser.Parser
 	repo   repository.Repository
+	mu     sync.Mutex
 }
 
 func NewParserService(siteParser parser.Parser, repo repository.Repository) ParseService {
@@ -22,6 +24,9 @@ func NewParserService(siteParser parser.Parser, repo repository.Repository) Pars
 // Parse uses one database writer and bounded batches. The old catalogue is
 // not truncated before parsing: a failed import must not destroy good data.
 func (s *parserService) Parse() (*models.ParseResults, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	results := &models.ParseResults{}
 	products := make(chan parser.Product, 512)
 	parseErr := make(chan error, 1)
