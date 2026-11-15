@@ -12,10 +12,10 @@ import (
 )
 
 type fakeRepository struct {
-	mu        sync.Mutex
+	mu         sync.Mutex
 	batchSizes []int
-	products  []parser.Product
-	getErr    error
+	products   []parser.Product
+	getErr     error
 }
 
 func (r *fakeRepository) SaveProduct(p parser.Product) error {
