@@ -48,12 +48,17 @@ func (s *parserService) Parse() (*models.ParseResults, error) {
 	}
 
 	for product := range products {
+		if saveErr != nil {
+			// Keep draining the parser channel so producer goroutines can exit.
+			continue
+		}
 		batch = append(batch, product)
 		if len(batch) == importBatchSize {
 			flush()
 		}
 	}
 	flush()
+	results.Inserted = inserted
 
 	if err := <-parseErr; err != nil {
 		results.Errors++
@@ -66,7 +71,5 @@ func (s *parserService) Parse() (*models.ParseResults, error) {
 		results.Errors++
 		return results, fmt.Errorf("save catalogue batch: %w", saveErr)
 	}
-
-	results.Inserted = inserted
 	return results, nil
 }
