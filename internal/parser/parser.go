@@ -169,18 +169,15 @@ func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) erro
 	parsed, failed := 0, 0
 	categories := make(map[string]struct{})
 	// One shared ticker limits the total request rate across all workers.
-	limiter := time.NewTicker(150 * time.Millisecond)
-	defer limiter.Stop()
+	
 
 	wg.Add(parserWorkerCount)
 	for i := 0; i < parserWorkerCount; i++ {
 		go func() {
 			defer wg.Done()
 			for address := range jobs {
-				select {
-				case <-ctx.Done():
+				if ctx.Err() != nil {
 					return
-				case <-limiter.C:
 				}
 
 				page, fetchErr := p.fetch(ctx, address)

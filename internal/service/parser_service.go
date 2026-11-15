@@ -1,82 +1,114 @@
 package service
 
 import (
-	"fmt"
-	"sync"
+ "fmt"
+ "log"
+ "sync"
+ "time"
 
-	"parser/internal/models"
-	"parser/internal/parser"
-	"parser/internal/repository"
+ "parser/internal/models"
+ "parser/internal/parser"
+ "parser/internal/repository"
 )
 
-const importBatchSize = 1000
+const (
+ importBatchSize = 500
+ writerCount     = 3
+)
 
 type parserService struct {
-	parser parser.Parser
-	repo   repository.Repository
-	mu     sync.Mutex
+ parser parser.Parser
+ repo   repository.Repository
+ mu     sync.Mutex
 }
 
 func NewParserService(siteParser parser.Parser, repo repository.Repository) ParseService {
-	return &parserService{parser: siteParser, repo: repo}
+ return &parserService{parser: siteParser, repo: repo}
 }
 
-// Parse uses one database writer and bounded batches. The old catalogue is
-// not truncated before parsing: a failed import must not destroy good data.
+// Parse reads products from the parser and hands full batches to several
+// database writers, so parsing never waits for a single slow INSERT.
+// The old catalogue is not truncated: a failed import must not destroy good data.
 func (s *parserService) Parse() (*models.ParseResults, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+ s.mu.Lock()
+ defer s.mu.Unlock()
 
-	results := &models.ParseResults{}
-	products := make(chan parser.Product, 512)
-	parseErr := make(chan error, 1)
+ results := &models.ParseResults{}
+ products := make(chan parser.Product, 512)
+ parseErr := make(chan error, 1)
 
-	go func() {
-		parseErr <- s.parser.Parse(products, results)
-		close(products)
-	}()
+ go func() {
+  parseErr <- s.parser.Parse(products, results)
+  close(products)
+ }()
 
-	batch := make([]parser.Product, 0, importBatchSize)
-	var inserted int
-	var saveErr error
+ batches := make(chan []parser.Product, writerCount*2)
+ var (
+  wg       sync.WaitGroup
+  mu       sync.Mutex
+  inserted int
+  saveErr  error
+ )
 
-	flush := func() {
-		if len(batch) == 0 || saveErr != nil {
-			return
-		}
-		if err := s.repo.SaveBuffer(batch); err != nil {
-			saveErr = err
-			return
-		}
-		inserted += len(batch)
-		batch = batch[:0]
-	}
+ wg.Add(writerCount)
+ for i := 0; i < writerCount; i++ {
+  go func() {
+   defer wg.Done()
+   for batch := range batches {
+    mu.Lock()
+    failed := saveErr != nil
+    mu.Unlock()
+    if failed {
+     continue // keep draining so the producer never blocks
+    }
 
-	for product := range products {
-		if saveErr != nil {
-			// Keep draining the parser channel so producer goroutines can exit.
-			continue
-		}
-		batch = append(batch, product)
-		if len(batch) == importBatchSize {
-			flush()
-		}
-	}
-	flush()
-	results.Inserted = inserted
+    start := time.Now()
+    err := s.repo.SaveBuffer(batch)
 
-	if err := <-parseErr; err != nil {
-		if results.Errors == 0 {
-			results.Errors++
-		}
-		if saveErr != nil {
-			return results, fmt.Errorf("save catalogue batch: %w (parser also failed: %v)", saveErr, err)
-		}
-		return results, fmt.Errorf("parse catalogue: %w", err)
-	}
-	if saveErr != nil {
-		results.Errors++
-		return results, fmt.Errorf("save catalogue batch: %w", saveErr)
-	}
-	return results, nil
+    mu.Lock()
+    if err != nil {
+     if saveErr == nil {
+      saveErr = err
+     }
+    } else {
+     inserted += len(batch)
+    }
+    mu.Unlock()
+
+    if err == nil {
+     log.Printf("saved %d rows in %s", len(batch), time.Since(start))
+    }
+   }
+  }()
+ }
+
+ batch := make([]parser.Product, 0, importBatchSize)
+ for product := range products {
+  batch = append(batch, product)
+  if len(batch) == importBatchSize {
+   batches <- batch
+   batch = make([]parser.Product, 0, importBatchSize) // new slice: writers own the old one
+  }
+ }
+ if len(batch) > 0 {
+  batches <- batch
+ }
+ close(batches)
+ wg.Wait()
+ results.Inserted = inserted
+
+ if err := <-parseErr; err != nil {
+  if results.Errors == 0 {
+   results.Errors++
+  }
+  if saveErr != nil {
+   return results, fmt.Errorf("save catalogue batch: %w (parser also failed: %v)", saveErr, err)
+  }
+  return results, fmt.Errorf("parse catalogue: %w", err)
+ }
+ if saveErr != nil {
+  results.Errors++
+  return results, fmt.Errorf("save catalogue batch: %w", saveErr)
+ }
+ return results, nil
 }
