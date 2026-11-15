@@ -2,11 +2,11 @@ package service
 
 import (
 	"fmt"
+	"sync"
 
 	"parser/internal/models"
 	"parser/internal/parser"
 	"parser/internal/repository"
-	"sync"
 )
 
 const importBatchSize = 1000
