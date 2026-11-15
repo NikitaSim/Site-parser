@@ -6,7 +6,7 @@ import "strings"
 // JSON decoding remains the authority for validating the extracted payload.
 func NormalizeJSON(response string) string {
 	response = strings.TrimSpace(response)
-	response = strings.TrimPrefix(response, "﻿")
+	response = strings.TrimPrefix(response, "\uFEFF")
 	response = strings.ReplaceAll(response, "```json", "")
 	response = strings.ReplaceAll(response, "```JSON", "")
 	response = strings.ReplaceAll(response, "```", "")
