@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	rerankBatchSize = 15
+	rerankBatchSize = 10
 	rerankWorkers   = 2
 )
 
