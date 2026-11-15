@@ -19,7 +19,7 @@ type Repository interface {
 	SaveBuffer([]parser.Product) error
 	GetProducts(models.Filters) ([]parser.Product, error)
 	CloseDB()
-	}
+}
 
 type postgresDB struct {
 	conn *pgxpool.Pool
