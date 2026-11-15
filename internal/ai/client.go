@@ -23,8 +23,8 @@ type Client struct {
 
 func NewClient(url string) *Client {
 	return &Client{
-		url: strings.TrimRight(strings.TrimSpace(url), "/"),
-		client: &http.Client{Timeout: 2 * time.Minute},
+		url:    strings.TrimRight(strings.TrimSpace(url), "/"),
+		client: &http.Client{Timeout: 30 * time.Minute},
 	}
 }
 

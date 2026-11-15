@@ -47,9 +47,9 @@ func main() {
 		Addr:              ":" + port,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
+		ReadTimeout:       30 * time.Minute,
 		WriteTimeout:      30 * time.Minute,
-		IdleTimeout:       time.Minute,
+		IdleTimeout:       time.Hour,
 	}
 
 	done := make(chan os.Signal, 1)

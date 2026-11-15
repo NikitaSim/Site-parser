@@ -21,7 +21,7 @@ import (
 	"parser/internal/models"
 )
 
-const parserWorkerCount = 8
+const parserWorkerCount = 32
 
 type Parser interface {
 	Parse(chan<- Product, *models.ParseResults) error
@@ -272,13 +272,13 @@ func parseProduct(body []byte, address string) (Product, error) {
 		item.Category = slug[0]
 	}
 	categoryNames := map[string]string{
-		"vannaya": "Ванная",
-		"dush": "Душ",
-		"kuhnja": "Кухня",
-		"kitchen": "Кухня",
-		"wc": "Туалет",
+		"vannaya":    "Ванная",
+		"dush":       "Душ",
+		"kuhnja":     "Кухня",
+		"kitchen":    "Кухня",
+		"wc":         "Туалет",
 		"aksessuary": "Аксессуары",
-		"nabory": "Наборы",
+		"nabory":     "Наборы",
 	}
 	if name, ok := categoryNames[item.Category]; ok {
 		item.Category = name
