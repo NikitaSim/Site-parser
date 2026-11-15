@@ -40,6 +40,6 @@ type ChatResponse struct {
 }
 
 type ChatOptions struct {
-	Temperature float32 `json:"temperature,omitempty"`
+	Temperature float32 `json:"temperature"`
 	NumPredict  int     `json:"num_predict,omitempty"`
 }
