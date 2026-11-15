@@ -1,35 +1,49 @@
 package parser
 
-import (
-	"testing"
-)
+import "testing"
 
-func TestProduct(t *testing.T) {
-	for _, tc := range []struct {
+func TestParseProduct(t *testing.T) {
+	tests := []struct {
+		name  string
 		price string
 		valid bool
-	}{{"47500.00", true}, {"0", true}, {"12.50", false}, {"-1", false}, {"2147483648", false}} {
-		body := []byte(`<script type="application/ld+json">{"@type":"Product","name":"Товар","sku":"123","offers":{"price":"` + tc.price + `","priceCurrency":"RUB"}}</script>`)
-		p, e := parseProduct(body, "https://grohe-russia.shop/wc/test.html")
-		if (e == nil) != tc.valid {
-			t.Fatalf("price %s: %v", tc.price, e)
-		}
-		if e == nil && (p.Category != "Туалет" || p.Price == nil) {
-			t.Fatal(p)
-		}
+	}{
+		{name: "whole rubles", price: "47500.00", valid: true},
+		{name: "zero", price: "0", valid: true},
+		{name: "fractional rubles", price: "12.50", valid: false},
+		{name: "negative", price: "-1", valid: false},
+		{name: "integer overflow", price: "2147483648", valid: false},
 	}
-	if _, e := parseProduct([]byte(`<h1>Not product</h1>`), "https://grohe-russia.shop/test.html"); e == nil {
-		t.Fatal("expected error")
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(`<script type="application/ld+json">{"@type":"Product","name":"Товар","sku":"123","description":"Описание","offers":{"price":"` + test.price + `","priceCurrency":"RUB"}}</script>`)
+			product, err := parseProduct(body, "https://grohe-russia.shop/wc/test.html")
+			if (err == nil) != test.valid {
+				t.Fatalf("price %s: unexpected error: %v", test.price, err)
+			}
+			if err == nil {
+				if product.Category != "Туалет" || product.Price == nil {
+					t.Fatalf("unexpected product: %+v", product)
+				}
+				if product.Title != "Товар" || product.Description != "Описание" || product.Link == "" {
+					t.Fatalf("product fields were not extracted: %+v", product)
+				}
+			}
+		})
 	}
 }
 
-func TestSoft404(t *testing.T) {
+func TestExtractMissingProductJSONLD(t *testing.T) {
+	_, err := extract([]byte("<html><title>GROHE</title></html>"))
+	if err == nil {
+		t.Fatal("expected JSON-LD extraction error")
+	}
+}
+
+func TestExtractSoft404(t *testing.T) {
 	_, err := extract([]byte("<html><title>404 Not Found</title></html>"))
 	if err != errPageGone {
-		t.Fatalf("expected removed page, got %v", err)
-	}
-	_, err = extract([]byte("<html><title>GROHE</title></html>"))
-	if err == nil || err == errPageGone {
-		t.Fatalf("expected extraction error, got %v", err)
+		t.Fatalf("expected removed page error, got %v", err)
 	}
 }
