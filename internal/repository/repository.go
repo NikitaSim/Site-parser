@@ -38,15 +38,23 @@ func NewRepo(dbURL string) (*postgresDB, error) {
 		return nil, fmt.Errorf("create database pool: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := conn.Ping(ctx); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("ping database: %w", err)
+	var pingErr error
+	for {
+		pingErr = conn.Ping(ctx)
+		if pingErr == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			conn.Close()
+			return nil, fmt.Errorf("ping database: %w", pingErr)
+		case <-time.After(time.Second):
+		}
 	}
 
 	// Product links are the stable identity for the GROHE catalogue.
-	// Remove legacy duplicates before creating the unique index.
 	if _, err := conn.Exec(ctx, `
 		DELETE FROM product older
 		USING product newer
@@ -73,9 +81,8 @@ func (db *postgresDB) SaveProduct(product parser.Product) error {
 	return db.SaveBuffer([]parser.Product{product})
 }
 
-// SaveBuffer writes bounded multi-row INSERT batches. A single importer owns
-// batching; the repository keeps each SQL statement below PostgreSQL's
-// parameter limit and updates an existing row when its canonical URL exists.
+// SaveBuffer writes bounded multi-row INSERT batches. One importer goroutine
+// batches records; each SQL statement contains at most 500 rows / 3000 args.
 func (db *postgresDB) SaveBuffer(products []parser.Product) error {
 	if len(products) == 0 {
 		return nil
