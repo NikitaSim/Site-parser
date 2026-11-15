@@ -63,6 +63,12 @@ func (s *searchService) Chat(message string) ([]parser.Product, error) {
 	if filter.NeedClarification {
 		return nil, ErrNeedClarification
 	}
+	if filter.PriceMin != nil && *filter.PriceMin < 0 {
+		return nil, fmt.Errorf("invalid minimum price: value cannot be negative")
+	}
+	if filter.PriceMax != nil && *filter.PriceMax < 0 {
+		return nil, fmt.Errorf("invalid maximum price: value cannot be negative")
+	}
 	if filter.PriceMin != nil && filter.PriceMax != nil && *filter.PriceMin > *filter.PriceMax {
 		return nil, fmt.Errorf("invalid price range: minimum exceeds maximum")
 	}
