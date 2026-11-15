@@ -58,7 +58,7 @@ type fakeAI struct {
 	response string
 }
 
-func (a fakeAI) Chat(string, string) (string, error) {
+func (a fakeAI) Chat(string, string, map[string]any) (string, error) {
 	return a.response, nil
 }
 
