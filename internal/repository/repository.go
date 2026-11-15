@@ -160,6 +160,19 @@ FROM product
 WHERE 1=1
 `
 	args := make([]any, 0)
+	keywordGroups := make([][]string, 0, len(filter.Keywords))
+	for _, group := range keywordGroups {
+		clean := make([]string, 0, len(group))
+		for _, word := range group {
+			word = strings.TrimSpace(word)
+			if word != "" {
+				clean = append(clean, word)
+			}
+		}
+		if len(clean) > 0 {
+			keywordGroups = append(keywordGroups, clean)
+		}
+	}
 
 	if len(filter.Categories) > 0 {
 		query += " AND ("
@@ -173,7 +186,7 @@ WHERE 1=1
 		query += ")"
 	}
 
-	for _, group := range filter.Keywords {
+	for _, group := range keywordGroups {
 		if len(group) == 0 {
 			continue
 		}
