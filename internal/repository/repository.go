@@ -3,12 +3,16 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"parser/internal/models"
 	"parser/internal/parser"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+const insertBatchSize = 500
 
 type Repository interface {
 	SaveProduct(parser.Product) error
@@ -19,203 +23,195 @@ type Repository interface {
 }
 
 type postgresDB struct {
-	conn  *pgxpool.Pool
-	dbUrl string
+	conn *pgxpool.Pool
 }
 
-func NewRepo(dbUrl string) (*postgresDB, error) {
-	ctx := context.Background()
-	conn, err := pgxpool.New(ctx, dbUrl)
+func NewRepo(dbURL string) (*postgresDB, error) {
+	cfg, err := pgxpool.ParseConfig(dbURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse database URL: %w", err)
 	}
-	return &postgresDB{
-		conn:  conn,
-		dbUrl: dbUrl,
-	}, nil
+	cfg.MaxConns = 8
+	cfg.MinConns = 1
+	conn, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		return nil, fmt.Errorf("create database pool: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := conn.Ping(ctx); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("ping database: %w", err)
+	}
+
+	// Product links are the stable identity for the GROHE catalogue.
+	// Remove legacy duplicates before creating the unique index.
+	if _, err := conn.Exec(ctx, `
+		DELETE FROM product older
+		USING product newer
+		WHERE older.link = newer.link
+		  AND older.link IS NOT NULL
+		  AND older.id < newer.id
+	`); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("remove duplicate product links: %w", err)
+	}
+	if _, err := conn.Exec(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_product_link_unique ON product(link)`); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("create unique product link index: %w", err)
+	}
+
+	return &postgresDB{conn: conn}, nil
 }
 
 func (db *postgresDB) CloseDB() {
 	db.conn.Close()
 }
 
-// сохранения одного товара
 func (db *postgresDB) SaveProduct(product parser.Product) error {
-
-	query := `
-	INSERT INTO product (product_name, category, price, info, link) 
-	VALUES ($1, $2, $3, $4, $5);`
-
-	ctx := context.Background()
-	_, err := db.conn.Exec(ctx, query,
-		product.Title,
-		product.Category,
-		product.Price,
-		product.Info,
-		product.Link,
-	)
-	if err != nil {
-		fmt.Println(product.Title)
-		return fmt.Errorf("Insert error: %s", err)
-	}
-
-	return nil
+	return db.SaveBuffer([]parser.Product{product})
 }
 
-// Батчевое сохранения товаров
+// SaveBuffer writes bounded multi-row INSERT batches. A single importer owns
+// batching; the repository keeps each SQL statement below PostgreSQL's
+// parameter limit and updates an existing row when its canonical URL exists.
 func (db *postgresDB) SaveBuffer(products []parser.Product) error {
-
-	query := "INSERT INTO product (product_name, category, price, info, product_description, link) VALUES \n"
-	arg := make([]any, 0)
-
-	for id, product := range products {
-		offset := id * 6
-		query += fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d),\n",
-			offset+1, offset+2, offset+3, offset+4, offset+5, offset+6)
-		arg = append(arg,
-			product.Title,
-			product.Category,
-			product.Price,
-			product.Info,
-			product.Description,
-			product.Link,
-		)
+	if len(products) == 0 {
+		return nil
 	}
 
-	query = query[:len(query)-2] + ";"
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 
-	ctx := context.Background()
-	if _, err := db.conn.Exec(ctx, query, arg...); err != nil {
-		return fmt.Errorf("Insert error: %s", err)
+	for start := 0; start < len(products); start += insertBatchSize {
+		end := start + insertBatchSize
+		if end > len(products) {
+			end = len(products)
+		}
+		batch := products[start:end]
+
+		var query strings.Builder
+		query.WriteString(`INSERT INTO product
+			(product_name, category, price, info, product_description, link)
+			VALUES `)
+		args := make([]any, 0, len(batch)*6)
+
+		for i, product := range batch {
+			if i > 0 {
+				query.WriteByte(',')
+			}
+			offset := i*6 + 1
+			fmt.Fprintf(&query, "($%d,$%d,$%d,$%d,$%d,$%d)",
+				offset, offset+1, offset+2, offset+3, offset+4, offset+5)
+			args = append(args,
+				product.Title,
+				product.Category,
+				product.Price,
+				product.Info,
+				product.Description,
+				product.Link,
+			)
+		}
+
+		query.WriteString(` ON CONFLICT (link) DO UPDATE SET
+			product_name = EXCLUDED.product_name,
+			category = EXCLUDED.category,
+			price = EXCLUDED.price,
+			info = EXCLUDED.info,
+			product_description = EXCLUDED.product_description`)
+
+		if _, err := db.conn.Exec(ctx, query.String(), args...); err != nil {
+			return fmt.Errorf("upsert product batch [%d:%d]: %w", start, end, err)
+		}
 	}
-
 	return nil
 }
 
+// ClearData is retained for explicit administrative use. Catalogue imports
+// intentionally do not call it: a failed import must not erase good data.
 func (db *postgresDB) ClearData() error {
-
-	ctx := context.Background()
-	if _, err := db.conn.Exec(ctx, "TRUNCATE TABLE product;"); err != nil {
-		return err
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := db.conn.Exec(ctx, "TRUNCATE TABLE product"); err != nil {
+		return fmt.Errorf("truncate product table: %w", err)
 	}
 	return nil
 }
 
 func (db *postgresDB) GetProducts(filter models.Filters) ([]parser.Product, error) {
-
 	query := `
-SELECT
-	product_name,
-	price,
-	product_description,
-	link
+SELECT category, product_name, price, info, product_description, link
 FROM product
 WHERE 1=1
 `
-
 	args := make([]any, 0)
 
-	// -----------------------------
-	// Категории
-	// -----------------------------
-
 	if len(filter.Categories) > 0 {
-
 		query += " AND ("
-
 		for i, category := range filter.Categories {
-
-			if i != 0 {
+			if i > 0 {
 				query += " OR "
 			}
-
 			query += fmt.Sprintf("category ILIKE $%d", len(args)+1)
 			args = append(args, "%"+category+"%")
 		}
-
 		query += ")"
 	}
 
-	// -----------------------------
-	// Ключевые слова
-	// -----------------------------
-
 	for _, group := range filter.Keywords {
-
 		if len(group) == 0 {
 			continue
 		}
 		query += " AND ("
-
 		for i, word := range group {
-			if i != 0 {
+			if i > 0 {
 				query += " OR "
 			}
-			query += fmt.Sprintf(`
-				product_name ILIKE $%d
-				OR product_description ILIKE $%d
-			`, len(args)+1, len(args)+1)
-
+			placeholder := len(args) + 1
+			query += fmt.Sprintf("(product_name ILIKE $%d OR product_description ILIKE $%d OR info ILIKE $%d)",
+				placeholder, placeholder, placeholder)
 			args = append(args, "%"+word+"%")
 		}
 		query += ")"
-
 	}
-
-	// -----------------------------
-	// Цена
-	// -----------------------------
 
 	if filter.PriceMin != nil {
-
-		query += fmt.Sprintf(
-			" AND price >= $%d",
-			len(args)+1,
-		)
-
+		query += fmt.Sprintf(" AND price >= $%d", len(args)+1)
 		args = append(args, *filter.PriceMin)
 	}
-
 	if filter.PriceMax != nil {
-
-		query += fmt.Sprintf(
-			" AND price <= $%d",
-			len(args)+1,
-		)
-
+		query += fmt.Sprintf(" AND price <= $%d", len(args)+1)
 		args = append(args, *filter.PriceMax)
 	}
 
-	query += " LIMIT 50"
+	query += " ORDER BY product_name LIMIT 200"
 
-	// fmt.Println(query)
-	// fmt.Println(args)
-
-	ctx := context.Background()
-
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	rows, err := db.conn.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query products: %w", err)
 	}
 	defer rows.Close()
 
-	var products []parser.Product
-
+	products := make([]parser.Product, 0)
 	for rows.Next() {
-
 		var product parser.Product
-
 		if err := rows.Scan(
+			&product.Category,
 			&product.Title,
 			&product.Price,
+			&product.Info,
 			&product.Description,
 			&product.Link,
 		); err != nil {
-			continue
+			return nil, fmt.Errorf("scan product row: %w", err)
 		}
-
 		products = append(products, product)
 	}
-
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate product rows: %w", err)
+	}
 	return products, nil
 }
