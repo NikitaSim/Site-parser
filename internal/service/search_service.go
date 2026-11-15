@@ -51,7 +51,7 @@ func (s *searchService) Chat(message string) ([]parser.Product, error) {
 		return nil, fmt.Errorf("empty user query")
 	}
 
-	response, err := s.aiChat.Chat(message, ai.SystemPrompt)
+	response, err := s.aiChat.Chat(message, ai.SystemPrompt, ai.FilterSchema)
 	if err != nil {
 		return nil, fmt.Errorf("extract search filters: %w", err)
 	}
@@ -152,7 +152,7 @@ func (s *searchService) rerankBatch(products []parser.Product, query string) []p
 		return products
 	}
 
-	response, err := s.aiChat.Chat(string(body), ai.RerankPrompt)
+	response, err := s.aiChat.Chat(string(body), ai.RerankPrompt, ai.RerankSchema)
 	if err != nil {
 		// Preserve the SQL result if the model is unavailable.
 		return products
