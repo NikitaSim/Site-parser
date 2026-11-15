@@ -66,7 +66,9 @@ func (s *parserService) Parse() (*models.ParseResults, error) {
 	results.Inserted = inserted
 
 	if err := <-parseErr; err != nil {
-		results.Errors++
+		if results.Errors == 0 {
+			results.Errors++
+		}
 		if saveErr != nil {
 			return results, fmt.Errorf("save catalogue batch: %w (parser also failed: %v)", saveErr, err)
 		}
