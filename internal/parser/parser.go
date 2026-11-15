@@ -211,11 +211,12 @@ func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) erro
 		}()
 	}
 
+sendJobs:
 	for _, address := range addresses {
 		select {
 		case jobs <- address:
 		case <-ctx.Done():
-			break
+			break sendJobs
 		}
 	}
 	close(jobs)
