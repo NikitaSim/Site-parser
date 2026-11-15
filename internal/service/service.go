@@ -13,7 +13,7 @@ import (
 	"sync"
 )
 
-const workerCount = 3
+const workerCount = 10
 
 var ErrNeedClarification = errors.New("need clarification")
 
@@ -260,11 +260,11 @@ func NormalizeJSON(resp string) string {
 // Сохранение товаров в БД
 func (s *parserService) batchWorker(in <-chan parser.Product, results *models.ParseResults, mx *sync.Mutex) error {
 
-	buffer := make([]parser.Product, 0, 100)
+	buffer := make([]parser.Product, 0, 250)
 
 	for product := range in {
 		buffer = append(buffer, product)
-		if len(buffer) >= 100 {
+		if len(buffer) >= 250 {
 			if err := s.repo.SaveBuffer(buffer); err != nil {
 				results.Errors++
 				return err
@@ -290,7 +290,7 @@ func (s *parserService) batchWorker(in <-chan parser.Product, results *models.Pa
 
 func (s *parserService) Parse() (*models.ParseResults, error) {
 
-	ch := make(chan parser.Product, 32)
+	ch := make(chan parser.Product, 128)
 	errCh := make(chan error, workerCount+1)
 	var mx sync.Mutex
 
