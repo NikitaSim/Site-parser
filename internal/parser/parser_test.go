@@ -17,7 +17,7 @@ func TestParseProduct(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			body := []byte(`<script type="application/ld+json">{"@type":"Product","name":"Товар","sku":"123","description":"Описание","offers":{"price":"` + test.price + `","priceCurrency":"RUB"}}</script>`)
+			body := []byte("<script type=\"application/ld+json\">{\"@type\":\"Product\",\"name\":\"Товар\",\"sku\":\"123\",\"description\":\"Описание\",\"offers\":{\"price\":\"" + test.price + "\",\"priceCurrency\":\"RUB\"}}</script>")
 			product, err := parseProduct(body, "https://grohe-russia.shop/wc/test.html")
 			if (err == nil) != test.valid {
 				t.Fatalf("price %s: unexpected error: %v", test.price, err)
