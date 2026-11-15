@@ -11,32 +11,25 @@ import (
 )
 
 type Handler struct {
-	service service.Service
+	parseService  service.ParseService
+	searchService service.SearchService
 }
 
-func NewHandler(service service.Service) *Handler {
-	return &Handler{
-		service: service,
-	}
+func NewHandler(parseService service.ParseService, searchService service.SearchService) *Handler {
+	return &Handler{parseService: parseService, searchService: searchService}
 }
 
 func (h *Handler) Parser(w http.ResponseWriter, r *http.Request) {
-
-	serviceResults, err := h.service.Parse()
+	results, err := h.parseService.Parse()
 	if err != nil {
-		http.Error(w, fmt.Sprint("Parser error:", err), http.StatusInternalServerError)
-		w.WriteHeader(http.StatusInternalServerError)
+		http.Error(w, fmt.Sprint("Parser error: ", err), http.StatusInternalServerError)
 		return
 	}
-
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	if err := json.NewEncoder(w).Encode(serviceResults); err != nil {
+	if err := json.NewEncoder(w).Encode(results); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 }
 
 type Messages struct {
@@ -44,41 +37,35 @@ type Messages struct {
 }
 
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
-
+	defer r.Body.Close()
 	var message Messages
-	if err := json.NewDecoder(r.Body).Decode(&message); err != nil {
-		http.Error(w, fmt.Sprint("json read error", err), http.StatusBadRequest)
-		w.WriteHeader(http.StatusBadRequest)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&message); err != nil {
+		http.Error(w, fmt.Sprint("JSON read error: ", err), http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
 
-	resp, err := h.service.Chat(string(message.Message))
-
+	response, err := h.searchService.Chat(message.Message)
 	if errors.Is(err, service.ErrNeedClarification) {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{
-			"message": "Уточните запрос пожалуйста используя следующие критерии:\nКатегория товара\nНазвание товара\nЦена товара",
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"message": "Уточните запрос: укажите тип товара, бренд, коллекцию или артикул.",
 		})
 		return
 	}
 	if err != nil {
-		http.Error(w, fmt.Sprint("Chat error:", err), http.StatusInternalServerError)
-		w.WriteHeader(http.StatusInternalServerError)
+		http.Error(w, fmt.Sprint("Chat error: ", err), http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		http.Error(w, fmt.Sprintf("JSON send error: %s", err), http.StatusInternalServerError)
-		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 }
 
-// Кастомный ResponseWriter для логирования запросов
 type ResponseWriter struct {
 	Status int
 	http.ResponseWriter
@@ -91,36 +78,24 @@ func (rw *ResponseWriter) WriteHeader(status int) {
 
 func (h *Handler) LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
-		rw := &ResponseWriter{
-			Status:         http.StatusOK,
-			ResponseWriter: w,
-		}
-
+		rw := &ResponseWriter{Status: http.StatusOK, ResponseWriter: w}
 		start := time.Now()
 		next.ServeHTTP(rw, r)
-
-		fmt.Println("STATUS:", rw.Status)
-		fmt.Println("Method:", r.Method)
-		fmt.Println("Path:", r.URL.Path)
-		fmt.Println("Time:", time.Since(start))
-
+		fmt.Println("STATUS:", rw.Status, "Method:", r.Method, "Path:", r.URL.Path, "Time:", time.Since(start))
 	})
 }
 
 func (h *Handler) RecoverMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
-			if err := recover(); err != nil {
+			if recover() != nil {
 				http.Error(w, "server crash", http.StatusInternalServerError)
-				return
 			}
 		}()
 		next.ServeHTTP(w, r)
 	})
 }
 
-// Сборка Middleware в одну цепочку
 func (h *Handler) Chain(handler http.Handler, middlewares ...func(next http.Handler) http.Handler) http.Handler {
 	for i := len(middlewares) - 1; i >= 0; i-- {
 		handler = middlewares[i](handler)
