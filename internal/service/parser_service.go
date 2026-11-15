@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	importBatchSize = 500
-	writerCount     = 3
+	importBatchSize = 1000
+	writerCount     = 16
 )
 
 type parserService struct {
