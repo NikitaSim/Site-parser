@@ -1,6 +1,7 @@
 package service
 
 import (
+	"log"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -72,7 +73,7 @@ func (s *searchService) Chat(message string) ([]parser.Product, error) {
 	if filter.PriceMin != nil && filter.PriceMax != nil && *filter.PriceMin > *filter.PriceMax {
 		return nil, fmt.Errorf("invalid price range: minimum exceeds maximum")
 	}
-
+	log.Println(filter)
 	// Keep explicit category and price constraints. If the strict text search
 	// returns nothing, progressively relax only keyword groups.
 	products, err := s.repo.GetProducts(filter)

@@ -34,18 +34,21 @@ func (c *Client) Chat(prompt, systemPrompt string) (string, error) {
 	}
 
 	requestBody := models.ChatRequest{
-		Model:  "qwen3:8b",
-		Stream: false,
-		Messages: []models.Message{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: prompt},
-		},
-		Options: &models.ChatOptions{
-			Temperature: 0,
-			NumPredict:  2048,
-			Think:       false,
-		},
-	}
+ Model:     "qwen3:8b",
+ Stream:    false,
+ Think:     false,
+ Format:    "json",
+ KeepAlive: "30m",
+ Messages: []models.Message{
+  {Role: "system", Content: systemPrompt},
+  {Role: "user", Content: prompt},
+ },
+ Options: &models.ChatOptions{
+  Temperature: 0,
+  NumPredict:  512,
+  NumCtx:      8192,
+ },
+}
 
 	payload, err := json.Marshal(requestBody)
 	if err != nil {
