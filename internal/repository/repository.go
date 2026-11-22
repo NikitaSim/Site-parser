@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,7 +13,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const insertBatchSize = 500
+const (
+	insertBatchSize  = 500
+	embeddingSize    = 1024
+	defaultCandidates = 100
+)
 
 type Repository interface {
 	SaveProduct(parser.Product) error
@@ -53,33 +58,19 @@ func NewRepo(dbURL string) (*postgresDB, error) {
 		}
 	}
 
-	// Product links are the stable identity for the GROHE catalogue.
-	if _, err := conn.Exec(ctx, `
-		DELETE FROM product older
-		USING product newer
-		WHERE older.link = newer.link
-		  AND older.link IS NOT NULL
-		  AND older.id < newer.id
-	`); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("remove duplicate product links: %w", err)
-	}
-	if _, err := conn.Exec(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_product_link_unique ON product(link)`); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("create unique product link index: %w", err)
-	}
-	if _, err := conn.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS pg_trgm`); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("enable pg_trgm: %w", err)
-	}
-	for _, indexQuery := range []string{
+	for _, query := range []string{
+		`CREATE EXTENSION IF NOT EXISTS pg_trgm`,
+		`CREATE EXTENSION IF NOT EXISTS vector`,
+		`ALTER TABLE product ADD COLUMN IF NOT EXISTS embedding vector(1024)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_product_link_unique ON product(link)`,
 		`CREATE INDEX IF NOT EXISTS idx_product_name_trgm ON product USING GIN (product_name gin_trgm_ops)`,
 		`CREATE INDEX IF NOT EXISTS idx_product_description_trgm ON product USING GIN (product_description gin_trgm_ops)`,
 		`CREATE INDEX IF NOT EXISTS idx_product_info_trgm ON product USING GIN (info gin_trgm_ops)`,
+		`CREATE INDEX IF NOT EXISTS idx_product_embedding_hnsw ON product USING hnsw (embedding vector_cosine_ops) WHERE embedding IS NOT NULL`,
 	} {
-		if _, err := conn.Exec(ctx, indexQuery); err != nil {
+		if _, err := conn.Exec(ctx, query); err != nil {
 			conn.Close()
-			return nil, fmt.Errorf("create trigram index: %w", err)
+			return nil, fmt.Errorf("initialize database schema: %w", err)
 		}
 	}
 
@@ -139,7 +130,15 @@ func (db *postgresDB) SaveBuffer(products []parser.Product) error {
 			category = EXCLUDED.category,
 			price = EXCLUDED.price,
 			info = EXCLUDED.info,
-			product_description = EXCLUDED.product_description
+			product_description = EXCLUDED.product_description,
+			embedding = CASE
+				WHEN product.product_name IS DISTINCT FROM EXCLUDED.product_name
+				  OR product.category IS DISTINCT FROM EXCLUDED.category
+				  OR product.info IS DISTINCT FROM EXCLUDED.info
+				  OR product.product_description IS DISTINCT FROM EXCLUDED.product_description
+				THEN NULL
+				ELSE product.embedding
+			END
 			WHERE product.product_name IS DISTINCT FROM EXCLUDED.product_name
 			   OR product.category IS DISTINCT FROM EXCLUDED.category
 			   OR product.price IS DISTINCT FROM EXCLUDED.price
@@ -151,6 +150,134 @@ func (db *postgresDB) SaveBuffer(products []parser.Product) error {
 		}
 	}
 	return nil
+}
+
+// SaveEmbeddings persists vectors for products identified by their stable links.
+func (db *postgresDB) SaveEmbeddings(products []parser.Product, embeddings [][]float32) error {
+	if len(products) != len(embeddings) {
+		return fmt.Errorf("products/embeddings length mismatch: %d != %d", len(products), len(embeddings))
+	}
+	if len(products) == 0 {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	tx, err := db.conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin embedding transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	for i, product := range products {
+		if len(embeddings[i]) != embeddingSize {
+			return fmt.Errorf("product %q has embedding with %d dimensions, want %d", product.Link, len(embeddings[i]), embeddingSize)
+		}
+		if product.Link == "" {
+			return fmt.Errorf("product at index %d has an empty link", i)
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE product SET embedding = $1::vector WHERE link = $2`,
+			vectorLiteral(embeddings[i]), product.Link,
+		); err != nil {
+			return fmt.Errorf("save embedding for %s: %w", product.Link, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit embedding transaction: %w", err)
+	}
+	return nil
+}
+
+// SearchSimilar returns nearest products while applying structured filters in SQL.
+func (db *postgresDB) SearchSimilar(embedding []float32, filter models.Filters, limit int) ([]parser.Product, error) {
+	if len(embedding) != embeddingSize {
+		return nil, fmt.Errorf("query embedding has %d dimensions, want %d", len(embedding), embeddingSize)
+	}
+	if limit <= 0 {
+		limit = defaultCandidates
+	}
+
+	query := `
+SELECT category, product_name, price, info, product_description, link
+FROM product
+WHERE embedding IS NOT NULL
+`
+	args := []any{vectorLiteral(embedding)}
+
+	categories := make([]string, 0, len(filter.Categories))
+	for _, category := range filter.Categories {
+		if category = strings.TrimSpace(category); category != "" {
+			categories = append(categories, category)
+		}
+	}
+	if len(categories) > 0 {
+		query += " AND ("
+		for i, category := range categories {
+			if i > 0 {
+				query += " OR "
+			}
+			query += fmt.Sprintf("category ILIKE $%d", len(args)+1)
+			args = append(args, "%"+category+"%")
+		}
+		query += ")"
+	}
+
+	if filter.PriceMin != nil {
+		query += fmt.Sprintf(" AND price >= $%d", len(args)+1)
+		args = append(args, *filter.PriceMin)
+	}
+	if filter.PriceMax != nil {
+		query += fmt.Sprintf(" AND price <= $%d", len(args)+1)
+		args = append(args, *filter.PriceMax)
+	}
+
+	query += fmt.Sprintf(" ORDER BY embedding <=> $1::vector LIMIT $%d", len(args)+1)
+	args = append(args, limit)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	rows, err := db.conn.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("semantic product search: %w", err)
+	}
+	defer rows.Close()
+
+	products := make([]parser.Product, 0, limit)
+	for rows.Next() {
+		var product parser.Product
+		if err := rows.Scan(
+			&product.Category,
+			&product.Title,
+			&product.Price,
+			&product.Info,
+			&product.Description,
+			&product.Link,
+		); err != nil {
+			return nil, fmt.Errorf("scan semantic product: %w", err)
+		}
+		products = append(products, product)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate semantic products: %w", err)
+	}
+	return products, nil
+}
+
+func vectorLiteral(values []float32) string {
+	var builder strings.Builder
+	builder.Grow(len(values) * 12)
+	builder.WriteByte('[')
+	for i, value := range values {
+		if i > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteString(strconv.FormatFloat(float64(value), 'f', -1, 32))
+	}
+	builder.WriteByte(']')
+	return builder.String()
 }
 
 func (db *postgresDB) GetProducts(filter models.Filters) ([]parser.Product, error) {
@@ -197,9 +324,6 @@ WHERE 1=1
 	}
 
 	for _, group := range keywordGroups {
-		if len(group) == 0 {
-			continue
-		}
 		query += " AND ("
 		for i, word := range group {
 			if i > 0 {
@@ -222,8 +346,6 @@ WHERE 1=1
 		args = append(args, *filter.PriceMax)
 	}
 
-	// Use trigram similarity to put the most promising candidates first.
-	// ILIKE remains the filter; similarity is used for ranking the survivors.
 	scoreTerms := make([]string, 0)
 	for _, group := range keywordGroups {
 		for _, word := range group {
