@@ -39,7 +39,7 @@ type Product struct {
 }
 
 func NewParser() *siteParser {
-	return &siteParser{client: &http.Client{Timeout: 15 * time.Second}}
+	return &siteParser{client: &http.Client{Timeout: 60 * time.Second}}
 }
 
 func (p *siteParser) fetch(ctx context.Context, address string) ([]byte, error) {
@@ -250,12 +250,20 @@ func parseProduct(body []byte, address string) (Product, error) {
 
 	if data.Offers.Price != "" {
 		price, ok := new(big.Rat).SetString(string(data.Offers.Price))
-		if !ok || !price.IsInt() || !price.Num().IsInt64() ||
-			price.Sign() < 0 || price.Num().Int64() > 2147483647 ||
+		if !ok || !price.Num().IsInt64() ||
+			price.Sign() < 0 ||
+			price.Num().Quo(price.Num(), price.Denom()).Int64() > 2147483647 ||
 			data.Offers.Currency != "RUB" {
-			return Product{}, fmt.Errorf("unsupported product price %q %q", data.Offers.Price, data.Offers.Currency)
+			return Product{}, fmt.Errorf(
+				"unsupported product price %q %q",
+				data.Offers.Price,
+				data.Offers.Currency,
+			)
 		}
-		value := int(price.Num().Int64())
+
+		// Отбрасываем копейки без округления.
+		priceInt := new(big.Int).Quo(price.Num(), price.Denom())
+		value := int(priceInt.Int64())
 		item.Price = &value
 	}
 
@@ -263,10 +271,12 @@ func parseProduct(body []byte, address string) (Product, error) {
 	if err != nil {
 		return Product{}, err
 	}
+
 	slug := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(slug) > 0 {
 		item.Category = slug[0]
 	}
+
 	categoryNames := map[string]string{
 		"vannaya":    "Ванная",
 		"dush":       "Душ",
@@ -276,8 +286,10 @@ func parseProduct(body []byte, address string) (Product, error) {
 		"aksessuary": "Аксессуары",
 		"nabory":     "Наборы",
 	}
+
 	if name, ok := categoryNames[item.Category]; ok {
 		item.Category = name
 	}
+
 	return item, nil
 }
