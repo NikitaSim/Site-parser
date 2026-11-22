@@ -13,7 +13,7 @@ import (
 )
 
 type ClientService interface {
-	Chat(string, string) (string, error)
+	Chat(string, string, map[string]any) (string, error)
 }
 
 type Client struct {
@@ -28,27 +28,27 @@ func NewClient(url string) *Client {
 	}
 }
 
-func (c *Client) Chat(prompt, systemPrompt string) (string, error) {
+func (c *Client) Chat(prompt, systemPrompt string, schema map[string]any) (string, error) {
 	if c.url == "" {
 		return "", fmt.Errorf("AI_URL is empty")
 	}
 
 	requestBody := models.ChatRequest{
- Model:     "qwen3:8b",
- Stream:    false,
- Think:     false,
- Format:    "json",
- KeepAlive: "30m",
- Messages: []models.Message{
-  {Role: "system", Content: systemPrompt},
-  {Role: "user", Content: prompt},
- },
- Options: &models.ChatOptions{
-  Temperature: 0,
-  NumPredict:  512,
-  NumCtx:      8192,
- },
-}
+		Model:     "qwen3:8b",
+		Stream:    false,
+		Think:     false,
+		Format:    schema,
+		KeepAlive: "30m",
+		Messages: []models.Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: prompt},
+		},
+		Options: &models.ChatOptions{
+			Temperature: 0,
+			NumPredict:  512,
+			NumCtx:      8192,
+		},
+	}
 
 	payload, err := json.Marshal(requestBody)
 	if err != nil {

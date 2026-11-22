@@ -164,3 +164,39 @@ const RerankPrompt = `
 
 Верни только JSON-объект без Markdown и пояснений.
 `
+
+var FilterSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"categories": map[string]any{
+			"type":  "array",
+			"items": map[string]any{"type": "string"},
+		},
+		"keywords": map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+		},
+		"priceMin":          map[string]any{"type": []string{"integer", "null"}},
+		"priceMax":          map[string]any{"type": []string{"integer", "null"}},
+		"needClarification": map[string]any{"type": "boolean"},
+		"message":           map[string]any{"type": "string"},
+	},
+	"required":             []string{"categories", "keywords", "priceMin", "priceMax", "needClarification", "message"},
+	"additionalProperties": false,
+}
+
+// RerankSchema asks the model to return only exact product links in relevance order.
+var RerankSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"links": map[string]any{
+			"type":  "array",
+			"items": map[string]any{"type": "string"},
+		},
+	},
+	"required":             []string{"links"},
+	"additionalProperties": false,
+}

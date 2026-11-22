@@ -25,13 +25,13 @@ type Message struct {
 }
 
 type ChatRequest struct {
- Model     string       "json:\"model\""
- Messages  []Message    "json:\"messages\""
- Stream    bool         "json:\"stream\""
- Think     bool         "json:\"think\""
- Format    string       "json:\"format,omitempty\""
- KeepAlive string       "json:\"keep_alive,omitempty\""
- Options   *ChatOptions "json:\"options,omitempty\""
+	Model     string         "json:\"model\""
+	Messages  []Message      "json:\"messages\""
+	Stream    bool           "json:\"stream\""
+	Think     bool           "json:\"think\""
+	Format    map[string]any "json:\"format,omitempty\""
+	KeepAlive string         "json:\"keep_alive,omitempty\""
+	Options   *ChatOptions   "json:\"options,omitempty\""
 }
 
 type ChatResponse struct {
@@ -41,7 +41,7 @@ type ChatResponse struct {
 }
 
 type ChatOptions struct {
- Temperature float32 "json:\"temperature\""
- NumPredict  int     "json:\"num_predict,omitempty\""
- NumCtx      int     "json:\"num_ctx,omitempty\""
+	Temperature float32 "json:\"temperature\""
+	NumPredict  int     "json:\"num_predict,omitempty\""
+	NumCtx      int     "json:\"num_ctx,omitempty\""
 }
