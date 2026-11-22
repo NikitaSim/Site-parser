@@ -93,16 +93,12 @@ func (s *searchService) Chat(message string) ([]parser.Product, error) {
 	}
 	log.Println(filter)
 
-	// Prefer hybrid semantic retrieval when the ML service and vector repository
-	// are configured. The original SQL + Ollama path remains a safe fallback.
 	if s.mlClient != nil {
 		if products, ok := s.semanticSearch(message, filter); ok {
 			return products, nil
 		}
 	}
 
-	// Keep explicit category and price constraints. If the strict text search
-	// returns nothing, progressively relax only keyword groups.
 	products, err := s.repo.GetProducts(filter)
 	if err != nil {
 		return nil, fmt.Errorf("search products: %w", err)
@@ -144,8 +140,6 @@ func (s *searchService) semanticSearch(query string, filter models.Filters) ([]p
 		return nil, false
 	}
 
-	// Merge semantic candidates with exact/substring candidates. This protects
-	// article numbers and exact product names from being lost by vector search.
 	lexicalProducts, lexicalErr := s.repo.GetProducts(filter)
 	if lexicalErr != nil {
 		log.Printf("lexical candidate search failed: %v", lexicalErr)
@@ -168,9 +162,17 @@ func (s *searchService) semanticSearch(query string, filter models.Filters) ([]p
 			}
 		}
 	}
-	add(semanticProducts)
+
+	// Reserve some candidate slots for lexical matches so exact article numbers
+	// and product names are not crowded out by the semantic nearest neighbors.
+	semanticHead := len(semanticProducts)
+	if semanticHead > semanticLimit*4/5 {
+		semanticHead = semanticLimit * 4 / 5
+	}
+	add(semanticProducts[:semanticHead])
+	add(lexicalProducts)
 	if len(candidates) < semanticLimit {
-		add(lexicalProducts)
+		add(semanticProducts[semanticHead:])
 	}
 	if len(candidates) == 0 {
 		return nil, false
