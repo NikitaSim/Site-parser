@@ -19,7 +19,7 @@ const (
 	embeddingBatchSize = 64
 )
 
-type embeddingClient interface {
+type EmbeddingClient interface {
 	Embed(context.Context, []string) ([][]float32, error)
 }
 
@@ -30,7 +30,7 @@ type embeddingRepository interface {
 type parserService struct {
 	parser   parser.Parser
 	repo     repository.Repository
-	embedder embeddingClient
+	embedder EmbeddingClient
 	mu       sync.Mutex
 	embedMu  sync.Mutex
 }
@@ -39,7 +39,7 @@ func NewParserService(siteParser parser.Parser, repo repository.Repository) Pars
 	return NewParserServiceWithEmbeddings(siteParser, repo, nil)
 }
 
-func NewParserServiceWithEmbeddings(siteParser parser.Parser, repo repository.Repository, embedder embeddingClient) ParseService {
+func NewParserServiceWithEmbeddings(siteParser parser.Parser, repo repository.Repository, embedder EmbeddingClient) ParseService {
 	return &parserService{parser: siteParser, repo: repo, embedder: embedder}
 }
 
