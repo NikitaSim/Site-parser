@@ -182,6 +182,9 @@ func (db *postgresDB) SaveEmbeddings(products []parser.Product, embeddings [][]f
 	}
 	defer tx.Rollback(ctx)
 
+	var query strings.Builder
+	query.WriteString("UPDATE product AS p SET embedding = v.embedding::vector FROM (VALUES ")
+	args := make([]any, 0, len(products)*2)
 	for i, product := range products {
 		if len(embeddings[i]) != embeddingSize {
 			return fmt.Errorf("product %q has embedding with %d dimensions, want %d", product.Link, len(embeddings[i]), embeddingSize)
@@ -189,14 +192,18 @@ func (db *postgresDB) SaveEmbeddings(products []parser.Product, embeddings [][]f
 		if product.Link == "" {
 			return fmt.Errorf("product at index %d has an empty link", i)
 		}
-		if _, err := tx.Exec(ctx,
-			`UPDATE product SET embedding = $1::vector WHERE link = $2`,
-			vectorLiteral(embeddings[i]), product.Link,
-		); err != nil {
-			return fmt.Errorf("save embedding for %s: %w", product.Link, err)
+		if i > 0 {
+			query.WriteByte(',')
 		}
+		offset := i*2 + 1
+		fmt.Fprintf(&query, "($%d,$%d)", offset, offset+1)
+		args = append(args, product.Link, vectorLiteral(embeddings[i]))
 	}
+	query.WriteString(") AS v(link, embedding) WHERE p.link = v.link")
 
+	if _, err := tx.Exec(ctx, query.String(), args...); err != nil {
+		return fmt.Errorf("save embedding batch: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit embedding transaction: %w", err)
 	}
