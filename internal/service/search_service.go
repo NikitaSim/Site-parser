@@ -41,7 +41,7 @@ type rerankResult struct {
 	products []parser.Product
 }
 
-type semanticClient interface {
+type SemanticClient interface {
 	Embed(context.Context, []string) ([][]float32, error)
 	Rerank(context.Context, string, []string) ([]float64, error)
 }
@@ -53,14 +53,14 @@ type semanticRepository interface {
 type searchService struct {
 	repo     repository.Repository
 	aiChat   ai.ClientService
-	mlClient semanticClient
+	mlClient SemanticClient
 }
 
 func NewSearchService(repo repository.Repository, aiChat ai.ClientService) SearchService {
 	return &searchService{repo: repo, aiChat: aiChat}
 }
 
-func NewSearchServiceWithML(repo repository.Repository, aiChat ai.ClientService, mlClient semanticClient) SearchService {
+func NewSearchServiceWithML(repo repository.Repository, aiChat ai.ClientService, mlClient SemanticClient) SearchService {
 	return &searchService{repo: repo, aiChat: aiChat, mlClient: mlClient}
 }
 
