@@ -4,68 +4,89 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
+	"strings"
+	"time"
 
 	"parser/internal/models"
 )
 
 type ClientService interface {
-	Chat(string, string) (string, error)
+	Chat(string, string, map[string]any) (string, error)
 }
 
 type Client struct {
-	url string
+	url    string
+	client *http.Client
 }
 
 func NewClient(url string) *Client {
 	return &Client{
-		url: url,
+		url:    strings.TrimRight(strings.TrimSpace(url), "/"),
+		client: &http.Client{Timeout: 60 * time.Minute},
 	}
 }
 
-// Скелет запроса в LLM
-func (c *Client) Chat(prompt, systemPrompt string) (string, error) {
+func (c *Client) Chat(prompt, systemPrompt string, schema map[string]any) (string, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("Ollama request completed in %s", time.Since(start))
+	}()
 
-	reqBody := models.ChatRequest{
-		Model:  "qwen3:8b",
-		Stream: false,
+	if c.url == "" {
+		return "", fmt.Errorf("AI_URL is empty")
+	}
 
+	requestBody := models.ChatRequest{
+		Model:     "qwen3:8b",
+		Stream:    false,
+		Think:     false,
+		Format:    schema,
+		KeepAlive: "30m",
 		Messages: []models.Message{
-			{
-				Role:    "system",
-				Content: systemPrompt,
-			},
-			{
-				Role:    "user",
-				Content: prompt,
-			},
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: prompt},
 		},
-
 		Options: &models.ChatOptions{
 			Temperature: 0,
-			Think:       false,
+			NumPredict:  512,
+			NumCtx:      8192,
 		},
 	}
 
-	req, err := json.Marshal(reqBody)
+	payload, err := json.Marshal(requestBody)
 	if err != nil {
-		return "", fmt.Errorf("JSON marshal error: %s", err)
+		return "", fmt.Errorf("marshal Ollama request: %w", err)
 	}
 
-	resp, err := http.Post(
-		c.url+"/api/chat",
-		"application/json",
-		bytes.NewReader(req),
-	)
+	req, err := http.NewRequest(http.MethodPost, c.url+"/api/chat", bytes.NewReader(payload))
 	if err != nil {
-		return "", fmt.Errorf("AI request error: %s", err)
+		return "", fmt.Errorf("create Ollama request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Ollama request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	var result models.ChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("Decode results error %s", err)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return "", fmt.Errorf("read Ollama response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("Ollama returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
+	var result models.ChatResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("decode Ollama response: %w", err)
+	}
+	if strings.TrimSpace(result.Message.Content) == "" {
+		return "", fmt.Errorf("Ollama returned an empty message")
+	}
 	return result.Message.Content, nil
 }

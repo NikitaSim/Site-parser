@@ -20,6 +20,17 @@
             "name": "products_DB",
             "database": "poducts",
             "username": "admin"
+        },
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5433,
+            "askForPassword": true,
+            "driver": "PostgreSQL",
+            "name": "ai DB",
+            "database": "poducts",
+            "username": "admin"
         }
     ]
 }
