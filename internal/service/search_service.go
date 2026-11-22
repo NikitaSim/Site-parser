@@ -1,11 +1,14 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"parser/internal/ai"
 	"parser/internal/models"
@@ -16,6 +19,7 @@ import (
 const (
 	rerankBatchSize = 10
 	rerankWorkers   = 2
+	semanticLimit   = 100
 )
 
 type rerankRequest struct {
@@ -37,13 +41,27 @@ type rerankResult struct {
 	products []parser.Product
 }
 
+type semanticClient interface {
+	Embed(context.Context, []string) ([][]float32, error)
+	Rerank(context.Context, string, []string) ([]float64, error)
+}
+
+type semanticRepository interface {
+	SearchSimilar([]float32, models.Filters, int) ([]parser.Product, error)
+}
+
 type searchService struct {
-	repo   repository.Repository
-	aiChat ai.ClientService
+	repo     repository.Repository
+	aiChat   ai.ClientService
+	mlClient semanticClient
 }
 
 func NewSearchService(repo repository.Repository, aiChat ai.ClientService) SearchService {
 	return &searchService{repo: repo, aiChat: aiChat}
+}
+
+func NewSearchServiceWithML(repo repository.Repository, aiChat ai.ClientService, mlClient semanticClient) SearchService {
+	return &searchService{repo: repo, aiChat: aiChat, mlClient: mlClient}
 }
 
 func (s *searchService) Chat(message string) ([]parser.Product, error) {
@@ -74,6 +92,15 @@ func (s *searchService) Chat(message string) ([]parser.Product, error) {
 		return nil, fmt.Errorf("invalid price range: minimum exceeds maximum")
 	}
 	log.Println(filter)
+
+	// Prefer hybrid semantic retrieval when the ML service and vector repository
+	// are configured. The original SQL + Ollama path remains a safe fallback.
+	if s.mlClient != nil {
+		if products, ok := s.semanticSearch(message, filter); ok {
+			return products, nil
+		}
+	}
+
 	// Keep explicit category and price constraints. If the strict text search
 	// returns nothing, progressively relax only keyword groups.
 	products, err := s.repo.GetProducts(filter)
@@ -94,6 +121,90 @@ func (s *searchService) Chat(message string) ([]parser.Product, error) {
 	}
 
 	return s.rerank(products, message), nil
+}
+
+func (s *searchService) semanticSearch(query string, filter models.Filters) ([]parser.Product, bool) {
+	vectorRepo, ok := s.repo.(semanticRepository)
+	if !ok {
+		return nil, false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	queryVectors, err := s.mlClient.Embed(ctx, []string{query})
+	if err != nil || len(queryVectors) != 1 {
+		log.Printf("semantic query embedding failed: %v", err)
+		return nil, false
+	}
+
+	semanticProducts, err := vectorRepo.SearchSimilar(queryVectors[0], filter, semanticLimit)
+	if err != nil {
+		log.Printf("semantic database search failed: %v", err)
+		return nil, false
+	}
+
+	// Merge semantic candidates with exact/substring candidates. This protects
+	// article numbers and exact product names from being lost by vector search.
+	lexicalProducts, lexicalErr := s.repo.GetProducts(filter)
+	if lexicalErr != nil {
+		log.Printf("lexical candidate search failed: %v", lexicalErr)
+	}
+
+	candidates := make([]parser.Product, 0, semanticLimit)
+	seen := make(map[string]struct{}, semanticLimit)
+	add := func(products []parser.Product) {
+		for _, product := range products {
+			if product.Link == "" {
+				continue
+			}
+			if _, exists := seen[product.Link]; exists {
+				continue
+			}
+			seen[product.Link] = struct{}{}
+			candidates = append(candidates, product)
+			if len(candidates) == semanticLimit {
+				return
+			}
+		}
+	}
+	add(semanticProducts)
+	if len(candidates) < semanticLimit {
+		add(lexicalProducts)
+	}
+	if len(candidates) == 0 {
+		return nil, false
+	}
+
+	passages := make([]string, len(candidates))
+	for i, product := range candidates {
+		passages[i] = strings.Join([]string{
+			product.Title,
+			product.Category,
+			product.Info,
+			product.Description,
+		}, "\n")
+	}
+
+	scores, err := s.mlClient.Rerank(ctx, query, passages)
+	if err != nil {
+		log.Printf("ML reranking failed: %v", err)
+		return nil, false
+	}
+
+	order := make([]int, len(candidates))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		return scores[order[i]] > scores[order[j]]
+	})
+
+	result := make([]parser.Product, 0, len(candidates))
+	for _, index := range order {
+		result = append(result, candidates[index])
+	}
+	return result, true
 }
 
 func (s *searchService) rerank(products []parser.Product, query string) []parser.Product {
@@ -155,7 +266,6 @@ func (s *searchService) rerankBatch(products []parser.Product, query string) []p
 
 	response, err := s.aiChat.Chat(string(body), ai.RerankPrompt, ai.RerankSchema)
 	if err != nil {
-		// Preserve the SQL result if the model is unavailable.
 		return products
 	}
 
@@ -181,7 +291,5 @@ func (s *searchService) rerankBatch(products []parser.Product, query string) []p
 		seen[link] = struct{}{}
 		result = append(result, product)
 	}
-	// An explicit empty links array means that the model found no relevant
-	// product. Return it as-is; only malformed/failed responses fall back.
 	return result
 }
