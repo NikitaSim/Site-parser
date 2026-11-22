@@ -47,6 +47,7 @@ func (p *siteParser) fetch(ctx context.Context, address string) ([]byte, error) 
 	if err != nil || u.Scheme != "https" || u.Host != "grohe-russia.shop" {
 		return nil, fmt.Errorf("invalid GROHE URL: %s", address)
 	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
 		return nil, err
@@ -64,6 +65,7 @@ func (p *siteParser) fetch(ctx context.Context, address string) ([]byte, error) 
 			response.StatusCode != http.StatusGatewayTimeout) {
 			break
 		}
+
 		_ = response.Body.Close()
 		select {
 		case <-ctx.Done():
@@ -79,6 +81,7 @@ func (p *siteParser) fetch(ctx context.Context, address string) ([]byte, error) 
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d: %s", response.StatusCode, address)
 	}
+
 	body, err := io.ReadAll(io.LimitReader(response.Body, 20<<20))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", address, err)
@@ -87,11 +90,10 @@ func (p *siteParser) fetch(ctx context.Context, address string) ([]byte, error) 
 }
 
 type product struct {
-	Type        string `json:"@type"`
-	Name        string `json:"name"`
-	SKU         string `json:"sku"`
-	Description string `json:"description"`
-	Offers      struct {
+	Type   string `json:"@type"`
+	Name   string `json:"name"`
+	SKU    string `json:"sku"`
+	Offers struct {
 		Price    json.Number `json:"price"`
 		Currency string      `json:"priceCurrency"`
 	} `json:"offers"`
@@ -99,12 +101,7 @@ type product struct {
 
 var errPageGone = errors.New("страница товара удалена")
 
-func extract(body []byte) (product, error) {
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
-	if err != nil {
-		return product{}, fmt.Errorf("parse product HTML: %w", err)
-	}
-
+func extract(doc *goquery.Document) (product, error) {
 	var found product
 	doc.Find(`script[type="application/ld+json"]`).Each(func(_ int, script *goquery.Selection) {
 		if found.Name != "" {
@@ -168,7 +165,6 @@ func (p *siteParser) Parse(ch chan<- Product, results *models.ParseResults) erro
 	var mu sync.Mutex
 	parsed, failed := 0, 0
 	categories := make(map[string]struct{})
-	// One shared ticker limits the total request rate across all workers.
 
 	wg.Add(parserWorkerCount)
 	for i := 0; i < parserWorkerCount; i++ {
@@ -235,15 +231,39 @@ sendJobs:
 	return nil
 }
 
+func extractCharacteristics(doc *goquery.Document) string {
+	var lines []string
+	doc.Find("#box-additional .product-view-attributes .attribute-set__row").Each(func(_ int, row *goquery.Selection) {
+		label := row.ChildrenFiltered("dt.attribute-set__name").First()
+		name := strings.Join(strings.Fields(label.AttrOr("title", "")), " ")
+		if name == "" {
+			label = label.Clone()
+			label.Find(".attribute-tooltip").Remove()
+			name = strings.Join(strings.Fields(label.Text()), " ")
+		}
+
+		name = strings.TrimSpace(strings.TrimRight(name, ":"))
+		value := strings.Join(strings.Fields(row.ChildrenFiltered("dd.attribute-set__value").First().Text()), " ")
+		if name != "" && value != "" {
+			lines = append(lines, name+": "+value)
+		}
+	})
+	return strings.Join(lines, "\n")
+}
+
 func parseProduct(body []byte, address string) (Product, error) {
-	data, err := extract(body)
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	if err != nil {
+		return Product{}, fmt.Errorf("parse product HTML: %w", err)
+	}
+	data, err := extract(doc)
 	if err != nil {
 		return Product{}, err
 	}
 
 	item := Product{
 		Title:       strings.TrimSpace(data.Name),
-		Description: strings.TrimSpace(data.Description),
+		Description: extractCharacteristics(doc),
 		Info:        strings.TrimSpace("Артикул: " + data.SKU),
 		Link:        address,
 	}
