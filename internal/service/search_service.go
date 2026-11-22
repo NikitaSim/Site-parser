@@ -140,9 +140,13 @@ func (s *searchService) semanticSearch(query string, filter models.Filters) ([]p
 		return nil, false
 	}
 
-	lexicalProducts, lexicalErr := s.repo.GetProducts(filter)
-	if lexicalErr != nil {
-		log.Printf("lexical candidate search failed: %v", lexicalErr)
+	var lexicalProducts []parser.Product
+	if len(filter.Keywords) > 0 {
+		var lexicalErr error
+		lexicalProducts, lexicalErr = s.repo.GetProducts(filter)
+		if lexicalErr != nil {
+			log.Printf("lexical candidate search failed: %v", lexicalErr)
+		}
 	}
 
 	candidates := make([]parser.Product, 0, semanticLimit)
