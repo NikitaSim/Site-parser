@@ -11,14 +11,14 @@ import (
 func TestEmbed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/embeddings" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		var request embeddingRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
 		}
 		if len(request.Texts) != 1 || request.Texts[0] != "test product" {
-			t.Fatalf("unexpected request: %#v", request)
+			t.Errorf("unexpected request: %#v", request)
 		}
 		vector := make([]float32, embeddingDimensions)
 		vector[0] = 0.5
@@ -41,14 +41,14 @@ func TestEmbed(t *testing.T) {
 func TestRerank(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/rerank" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		var request rerankRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
 		}
 		if request.Query != "black shower set" || len(request.Passages) != 2 {
-			t.Fatalf("unexpected request: %#v", request)
+			t.Errorf("unexpected request: %#v", request)
 		}
 		_ = json.NewEncoder(w).Encode(rerankResponse{Scores: []float64{0.8, 0.2}})
 	}))
