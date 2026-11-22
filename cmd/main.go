@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"parser/internal/ai"
 	"parser/internal/handler"
+	"parser/internal/ml"
 	"parser/internal/parser"
 	"parser/internal/repository"
 	"parser/internal/service"
@@ -20,6 +22,7 @@ func main() {
 	dbURL := os.Getenv("DB_URL")
 	port := os.Getenv("PORT")
 	aiURL := os.Getenv("AI_URL")
+	mlURL := strings.TrimSpace(os.Getenv("ML_URL"))
 	if dbURL == "" || port == "" || aiURL == "" {
 		fmt.Fprintln(os.Stderr, "DB_URL, PORT and AI_URL must be set")
 		os.Exit(1)
@@ -33,8 +36,19 @@ func main() {
 	defer repo.CloseDB()
 
 	aiClient := ai.NewClient(aiURL)
-	parseService := service.NewParserService(parser.NewParser(), repo)
-	searchService := service.NewSearchService(repo, aiClient)
+	var parseService service.ParseService
+	var searchService service.SearchService
+
+	if mlURL != "" {
+		mlClient := ml.NewClient(mlURL)
+		parseService = service.NewParserServiceWithEmbeddings(parser.NewParser(), repo, mlClient)
+		searchService = service.NewSearchServiceWithML(repo, aiClient, mlClient)
+	} else {
+		fmt.Fprintln(os.Stderr, "ML_URL is empty: semantic indexing is disabled; using the legacy search path")
+		parseService = service.NewParserService(parser.NewParser(), repo)
+		searchService = service.NewSearchService(repo, aiClient)
+	}
+
 	apiHandler := handler.NewHandler(parseService, searchService)
 
 	mux := http.NewServeMux()
