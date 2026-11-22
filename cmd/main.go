@@ -48,7 +48,7 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Minute,
-		WriteTimeout:      30 * time.Minute,
+		WriteTimeout:      45 * time.Minute,
 		IdleTimeout:       time.Hour,
 	}
 

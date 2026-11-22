@@ -67,13 +67,27 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 }
 
 type ResponseWriter struct {
-	Status int
 	http.ResponseWriter
+	Status      int
+	WroteHeader bool
 }
 
 func (rw *ResponseWriter) WriteHeader(status int) {
+	if rw.WroteHeader {
+		return
+	}
+
 	rw.Status = status
+	rw.WroteHeader = true
 	rw.ResponseWriter.WriteHeader(status)
+}
+
+func (rw *ResponseWriter) Write(b []byte) (int, error) {
+	if !rw.WroteHeader {
+		rw.WriteHeader(http.StatusOK)
+	}
+
+	return rw.ResponseWriter.Write(b)
 }
 
 func (h *Handler) LoggingMiddleware(next http.Handler) http.Handler {
@@ -88,10 +102,12 @@ func (h *Handler) LoggingMiddleware(next http.Handler) http.Handler {
 func (h *Handler) RecoverMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
-			if recover() != nil {
+			if recovered := recover(); recovered != nil {
+				fmt.Printf("PANIC: %v\n", recovered)
 				http.Error(w, "server crash", http.StatusInternalServerError)
 			}
 		}()
+
 		next.ServeHTTP(w, r)
 	})
 }

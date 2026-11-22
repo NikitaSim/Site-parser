@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -24,11 +25,16 @@ type Client struct {
 func NewClient(url string) *Client {
 	return &Client{
 		url:    strings.TrimRight(strings.TrimSpace(url), "/"),
-		client: &http.Client{Timeout: 30 * time.Minute},
+		client: &http.Client{Timeout: 60 * time.Minute},
 	}
 }
 
 func (c *Client) Chat(prompt, systemPrompt string, schema map[string]any) (string, error) {
+	start := time.Now()
+	defer func() {
+		log.Printf("Ollama request completed in %s", time.Since(start))
+	}()
+
 	if c.url == "" {
 		return "", fmt.Errorf("AI_URL is empty")
 	}
