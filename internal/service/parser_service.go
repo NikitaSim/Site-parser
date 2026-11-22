@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,18 +14,33 @@ import (
 )
 
 const (
-	importBatchSize = 1000
-	writerCount     = 16
+	importBatchSize    = 1000
+	writerCount        = 16
+	embeddingBatchSize = 64
 )
 
+type embeddingClient interface {
+	Embed(context.Context, []string) ([][]float32, error)
+}
+
+type embeddingRepository interface {
+	SaveEmbeddings([]parser.Product, [][]float32) error
+}
+
 type parserService struct {
-	parser parser.Parser
-	repo   repository.Repository
-	mu     sync.Mutex
+	parser   parser.Parser
+	repo     repository.Repository
+	embedder embeddingClient
+	mu       sync.Mutex
+	embedMu  sync.Mutex
 }
 
 func NewParserService(siteParser parser.Parser, repo repository.Repository) ParseService {
-	return &parserService{parser: siteParser, repo: repo}
+	return NewParserServiceWithEmbeddings(siteParser, repo, nil)
+}
+
+func NewParserServiceWithEmbeddings(siteParser parser.Parser, repo repository.Repository, embedder embeddingClient) ParseService {
+	return &parserService{parser: siteParser, repo: repo, embedder: embedder}
 }
 
 // Parse reads products from the parser and hands full batches to several
@@ -44,10 +61,11 @@ func (s *parserService) Parse() (*models.ParseResults, error) {
 
 	batches := make(chan []parser.Product, writerCount*2)
 	var (
-		wg       sync.WaitGroup
-		mu       sync.Mutex
-		inserted int
-		saveErr  error
+		wg                sync.WaitGroup
+		mu                sync.Mutex
+		inserted          int
+		embeddingFailures int
+		saveErr           error
 	)
 
 	wg.Add(writerCount)
@@ -59,7 +77,7 @@ func (s *parserService) Parse() (*models.ParseResults, error) {
 				failed := saveErr != nil
 				mu.Unlock()
 				if failed {
-					continue // keep draining so the producer never blocks
+					continue
 				}
 
 				start := time.Now()
@@ -77,6 +95,14 @@ func (s *parserService) Parse() (*models.ParseResults, error) {
 
 				if err == nil {
 					log.Printf("saved %d rows in %s", len(batch), time.Since(start))
+					if s.embedder != nil {
+						if err := s.indexBatch(batch); err != nil {
+							mu.Lock()
+							embeddingFailures++
+							mu.Unlock()
+							log.Printf("embedding batch failed: %v", err)
+						}
+					}
 				}
 			}
 		}()
@@ -87,7 +113,7 @@ func (s *parserService) Parse() (*models.ParseResults, error) {
 		batch = append(batch, product)
 		if len(batch) == importBatchSize {
 			batches <- batch
-			batch = make([]parser.Product, 0, importBatchSize) // new slice: writers own the old one
+			batch = make([]parser.Product, 0, importBatchSize)
 		}
 	}
 	if len(batch) > 0 {
@@ -96,6 +122,7 @@ func (s *parserService) Parse() (*models.ParseResults, error) {
 	close(batches)
 	wg.Wait()
 	results.Inserted = inserted
+	results.Errors += embeddingFailures
 
 	if err := <-parseErr; err != nil {
 		if results.Errors == 0 {
@@ -111,4 +138,48 @@ func (s *parserService) Parse() (*models.ParseResults, error) {
 		return results, fmt.Errorf("save catalogue batch: %w", saveErr)
 	}
 	return results, nil
+}
+
+func (s *parserService) indexBatch(products []parser.Product) error {
+	repo, ok := s.repo.(embeddingRepository)
+	if !ok {
+		return fmt.Errorf("repository does not support embedding persistence")
+	}
+
+	for start := 0; start < len(products); start += embeddingBatchSize {
+		end := start + embeddingBatchSize
+		if end > len(products) {
+			end = len(products)
+		}
+		batch := products[start:end]
+		texts := make([]string, 0, len(batch))
+		for _, product := range batch {
+			text := strings.Join([]string{
+				product.Title,
+				product.Category,
+				product.Info,
+				product.Description,
+			}, "\n")
+			runes := []rune(strings.TrimSpace(text))
+			if len(runes) > 20000 {
+				text = string(runes[:20000])
+			} else {
+				text = string(runes)
+			}
+			texts = append(texts, text)
+		}
+
+		// The model is shared by all database writer workers. Serialize inference
+		// requests to avoid loading several large batches into memory at once.
+		s.embedMu.Lock()
+		vectors, err := s.embedder.Embed(context.Background(), texts)
+		s.embedMu.Unlock()
+		if err != nil {
+			return fmt.Errorf("generate embeddings for batch [%d:%d]: %w", start, end, err)
+		}
+		if err := repo.SaveEmbeddings(batch, vectors); err != nil {
+			return fmt.Errorf("persist embeddings for batch [%d:%d]: %w", start, end, err)
+		}
+	}
+	return nil
 }
