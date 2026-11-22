@@ -21,7 +21,7 @@ services:
       context: ./ml_service
     restart: unless-stopped
     environment:
-      MODEL_DEVICE: ${MODEL_DEVICE:-auto}
+      MODEL_DEVICE: ${MODEL_DEVICE:-cpu}
       EMBEDDING_MODEL: BAAI/bge-m3
       RERANKER_MODEL: BAAI/bge-reranker-v2-m3
       EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-16}
