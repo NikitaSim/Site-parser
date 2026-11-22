@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	insertBatchSize  = 500
-	embeddingSize    = 1024
+	insertBatchSize   = 500
+	embeddingSize     = 1024
 	defaultCandidates = 100
 )
 
@@ -56,6 +56,18 @@ func NewRepo(dbURL string) (*postgresDB, error) {
 			return nil, fmt.Errorf("ping database: %w", pingErr)
 		case <-time.After(time.Second):
 		}
+	}
+
+	// Product links are the stable identity for the GROHE catalogue.
+	if _, err := conn.Exec(ctx, `
+		DELETE FROM product older
+		USING product newer
+		WHERE older.link = newer.link
+		  AND older.link IS NOT NULL
+		  AND older.id < newer.id
+	`); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("remove duplicate product links: %w", err)
 	}
 
 	for _, query := range []string{
