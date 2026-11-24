@@ -20,6 +20,7 @@ const (
 	rerankBatchSize = 10
 	rerankWorkers   = 2
 	semanticLimit   = 100
+	maxSearchResults = 10
 )
 
 type rerankRequest struct {
@@ -95,7 +96,7 @@ func (s *searchService) Chat(message string) ([]parser.Product, error) {
 
 	if s.mlClient != nil {
 		if products, ok := s.semanticSearch(message, filter); ok {
-			return products, nil
+			return limitProducts(products, maxSearchResults), nil
 		}
 	}
 
@@ -116,7 +117,7 @@ func (s *searchService) Chat(message string) ([]parser.Product, error) {
 		return []parser.Product{}, nil
 	}
 
-	return s.rerank(products, message), nil
+	return limitProducts(s.rerank(products, message), maxSearchResults), nil
 }
 
 func (s *searchService) semanticSearch(query string, filter models.Filters) ([]parser.Product, bool) {
