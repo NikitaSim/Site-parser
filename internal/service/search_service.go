@@ -300,3 +300,15 @@ func (s *searchService) rerankBatch(products []parser.Product, query string) []p
 	}
 	return result
 }
+
+
+// limitProducts enforces the public search response limit after ranking.
+func limitProducts(products []parser.Product, limit int) []parser.Product {
+	if limit <= 0 {
+		return []parser.Product{}
+	}
+	if len(products) <= limit {
+		return products
+	}
+	return products[:limit]
+}
