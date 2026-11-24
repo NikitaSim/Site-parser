@@ -32,7 +32,6 @@ type parserService struct {
 	repo     repository.Repository
 	embedder EmbeddingClient
 	mu       sync.Mutex
-	embedMu  sync.Mutex
 }
 
 func NewParserService(siteParser parser.Parser, repo repository.Repository) ParseService {
@@ -169,11 +168,9 @@ func (s *parserService) indexBatch(products []parser.Product) error {
 			texts = append(texts, text)
 		}
 
-		// The model is shared by all database writer workers. Serialize inference
-		// requests to avoid loading several large batches into memory at once.
-		s.embedMu.Lock()
+		// Concurrent writer workers submit requests to the Python batcher.
+		// The Python service combines their texts into bounded model batches.
 		vectors, err := s.embedder.Embed(context.Background(), texts)
-		s.embedMu.Unlock()
 		if err != nil {
 			return fmt.Errorf("generate embeddings for batch [%d:%d]: %w", start, end, err)
 		}
