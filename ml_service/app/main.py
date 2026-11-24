@@ -1,6 +1,8 @@
+import asyncio
 import os
 import threading
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -70,6 +72,8 @@ class ModelRuntime:
             query_max_length=256,
             passage_max_length=self.max_length,
         )
+        # Embedding and reranking share one device. Keep actual model inference
+        # mutually exclusive even though HTTP requests may arrive concurrently.
         self.lock = threading.Lock()
         self.embedding_model = embedding_name
         self.reranker_model = reranker_name
@@ -99,14 +103,120 @@ class ModelRuntime:
         return [float(score) for score in scores]
 
 
+@dataclass
+class _EmbeddingRequestState:
+    future: asyncio.Future[list[list[float]]]
+    vectors: list[list[float] | None]
+    remaining: int
+
+
+class EmbeddingBatcher:
+    """Collect texts from concurrent HTTP requests into shared model batches."""
+
+    def __init__(self, runtime: ModelRuntime) -> None:
+        self.runtime = runtime
+        self.max_batch_size = max(1, int(os.getenv("DYNAMIC_BATCH_MAX_SIZE", "128")))
+        self.max_wait_seconds = max(0.001, float(os.getenv("DYNAMIC_BATCH_MAX_WAIT_MS", "150")) / 1000)
+        self.queue: asyncio.Queue[tuple[str, _EmbeddingRequestState, int] | None] = asyncio.Queue(
+            maxsize=max(128, int(os.getenv("DYNAMIC_BATCH_QUEUE_SIZE", "4096")))
+        )
+        self.worker: asyncio.Task[None] | None = None
+
+    async def start(self) -> None:
+        self.worker = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        if self.worker is not None:
+            await self.queue.put(None)
+            await self.worker
+            self.worker = None
+
+    async def submit(self, texts: list[str]) -> list[list[float]]:
+        loop = asyncio.get_running_loop()
+        state = _EmbeddingRequestState(
+            future=loop.create_future(),
+            vectors=[None] * len(texts),
+            remaining=len(texts),
+        )
+
+        try:
+            for index, text in enumerate(texts):
+                await asyncio.wait_for(
+                    self.queue.put((text, state, index)),
+                    timeout=10,
+                )
+        except asyncio.TimeoutError as exc:
+            if not state.future.done():
+                state.future.set_exception(RuntimeError("embedding queue is full"))
+            raise RuntimeError("embedding queue is full") from exc
+
+        return await state.future
+
+    async def _run(self) -> None:
+        loop = asyncio.get_running_loop()
+        stopping = False
+
+        while not stopping:
+            first = await self.queue.get()
+            if first is None:
+                self.queue.task_done()
+                break
+
+            batch = [first]
+            deadline = loop.time() + self.max_wait_seconds
+
+            while len(batch) < self.max_batch_size:
+                remaining_time = deadline - loop.time()
+                if remaining_time <= 0:
+                    break
+                try:
+                    item = await asyncio.wait_for(self.queue.get(), timeout=remaining_time)
+                except asyncio.TimeoutError:
+                    break
+
+                if item is None:
+                    self.queue.task_done()
+                    stopping = True
+                    break
+                batch.append(item)
+
+            try:
+                vectors = await asyncio.to_thread(
+                    self.runtime.embed,
+                    [item[0] for item in batch],
+                )
+                if len(vectors) != len(batch):
+                    raise RuntimeError("embedding model returned an unexpected number of vectors")
+
+                for (_, state, index), vector in zip(batch, vectors):
+                    state.vectors[index] = vector
+                    state.remaining -= 1
+                    if state.remaining == 0 and not state.future.done():
+                        state.future.set_result([value for value in state.vectors if value is not None])
+            except Exception as exc:
+                for _, state, _ in batch:
+                    if not state.future.done():
+                        state.future.set_exception(exc)
+            finally:
+                for _ in batch:
+                    self.queue.task_done()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Load both models once. The API becomes healthy only after initialization.
-    app.state.runtime = ModelRuntime()
-    yield
+    runtime = ModelRuntime()
+    batcher = EmbeddingBatcher(runtime)
+    await batcher.start()
+    app.state.runtime = runtime
+    app.state.batcher = batcher
+    try:
+        yield
+    finally:
+        await batcher.stop()
 
 
-app = FastAPI(title="Site Parser ML Service", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Site Parser ML Service", version="1.1.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -124,14 +234,14 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/v1/embeddings")
-def embeddings(request: EmbeddingRequest) -> dict[str, Any]:
-    runtime = getattr(app.state, "runtime", None)
-    if runtime is None:
+async def embeddings(request: EmbeddingRequest) -> dict[str, Any]:
+    batcher = getattr(app.state, "batcher", None)
+    if batcher is None:
         raise HTTPException(status_code=503, detail="models are not loaded")
     try:
-        return {"embeddings": runtime.embed(request.texts)}
+        return {"embeddings": await batcher.submit(request.texts)}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"embedding failed: {exc}") from exc
+        raise HTTPException(status_code=503, detail=f"embedding failed: {exc}") from exc
 
 
 @app.post("/v1/rerank")
