@@ -10,7 +10,7 @@ func TestParseProduct(t *testing.T) {
 	}{
 		{name: "whole rubles", price: "47500.00", valid: true},
 		{name: "zero", price: "0", valid: true},
-		{name: "fractional rubles", price: "12.50", valid: false},
+		{name: "fractional rubles", price: "12.50", valid: true},
 		{name: "negative", price: "-1", valid: false},
 		{name: "integer overflow", price: "2147483648", valid: false},
 	}
@@ -25,6 +25,9 @@ func TestParseProduct(t *testing.T) {
 			if err == nil {
 				if product.Category != "Туалет" || product.Price == nil {
 					t.Fatalf("unexpected product: %+v", product)
+				}
+				if test.name == "fractional rubles" && *product.Price != 12 {
+					t.Fatalf("fractional price = %d, want 12 after truncating kopeks", *product.Price)
 				}
 				if product.Title != "Товар" || product.Description != "" || product.Link == "" {
 					t.Fatalf("product fields were not extracted: %+v", product)
