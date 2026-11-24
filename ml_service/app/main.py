@@ -146,8 +146,7 @@ class EmbeddingBatcher:
                     timeout=10,
                 )
         except asyncio.TimeoutError as exc:
-            if not state.future.done():
-                state.future.set_exception(RuntimeError("embedding queue is full"))
+            state.future.cancel()
             raise RuntimeError("embedding queue is full") from exc
 
         return await state.future
