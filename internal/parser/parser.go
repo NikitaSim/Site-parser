@@ -270,9 +270,8 @@ func parseProduct(body []byte, address string) (Product, error) {
 
 	if data.Offers.Price != "" {
 		price, ok := new(big.Rat).SetString(string(data.Offers.Price))
-		if !ok || !price.IsInt() || !price.Num().IsInt64() ||
+		if !ok || !price.Num().IsInt64() ||
 			price.Sign() < 0 ||
-			price.Num().Int64() > 2147483647 ||
 			data.Offers.Currency != "RUB" {
 			return Product{}, fmt.Errorf(
 				"unsupported product price %q %q",
@@ -281,7 +280,16 @@ func parseProduct(body []byte, address string) (Product, error) {
 			)
 		}
 
-		value := int(price.Num().Int64())
+		// The manufacturer's site displays whole rubles, so truncate kopeks.
+		priceInt := new(big.Int).Quo(price.Num(), price.Denom())
+		if priceInt.Int64() > 2147483647 {
+			return Product{}, fmt.Errorf(
+				"unsupported product price %q %q",
+				data.Offers.Price,
+				data.Offers.Currency,
+			)
+		}
+		value := int(priceInt.Int64())
 		item.Price = &value
 	}
 
